@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Build output
+dist/
+.vite/
+
+# Tauri build artifacts
+src-tauri/target/
+*.deb
+*.AppImage
+*.dmg
+*.app
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data (OBD CSVs / Parquet cache)
+data/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editor
+.DS_Store
+.idea/
+*.swp
+*.swo
+
+# TanStack Router regenerates this on dev start; track the placeholder
+# src/routeTree.gen.ts

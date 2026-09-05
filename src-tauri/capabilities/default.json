@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "Default capabilities for Z OBD Dashboard",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "fs:default",
+    "shell:default",
+    "deep-link:default"
+  ]
+}

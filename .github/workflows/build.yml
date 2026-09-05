@@ -1,0 +1,109 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Web (Cloudflare Pages) ─────────────────────────────────────────────────
+  web:
+    name: Web — build & deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build web dist/ via Docker
+        run: |
+          docker build \
+            --target web \
+            --output type=local,dest=dist \
+            -f Dockerfile .
+
+      - name: Deploy to Cloudflare Pages
+        if: github.ref == 'refs/heads/main'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist/ --project-name z-obd
+
+  # ─── Linux desktop (.deb / .AppImage) ───────────────────────────────────────
+  desktop-linux:
+    name: Linux desktop — .deb + .AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Linux bundle via Docker
+        run: |
+          docker build \
+            --target linux \
+            --output type=local,dest=bundle \
+            -f Dockerfile .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundle
+          path: bundle/
+          retention-days: 14
+
+  # ─── macOS desktop (mac mini self-hosted runner) ─────────────────────────────
+  desktop-mac:
+    name: macOS desktop
+    runs-on: [self-hosted, macOS]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enter Nix dev shell and build
+        run: |
+          nix develop --command sh -c "
+            bun install --frozen-lockfile
+            bun run build
+            cargo install tauri-cli --version '^2' --locked
+            cargo tauri build --target universal-apple-darwin
+          "
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: src-tauri/target/universal-apple-darwin/release/bundle/
+          retention-days: 14
+
+  # ─── iOS (mac mini self-hosted runner) ───────────────────────────────────────
+  ios:
+    name: iOS
+    runs-on: [self-hosted, macOS]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enter Nix dev shell and build iOS
+        run: |
+          nix develop --command sh -c "
+            bun install --frozen-lockfile
+            bun run build
+            cargo install tauri-cli --version '^2' --locked
+            bunx tauri ios build
+          "
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-bundle
+          path: src-tauri/gen/apple/build/
+          retention-days: 14

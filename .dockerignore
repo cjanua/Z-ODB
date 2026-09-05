@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.venv/
+data/
+target/
+src-tauri/target/
+.env
+*.deb
+*.AppImage
+*.dmg
+*.app
+.git/
+.github/
