@@ -3,6 +3,13 @@ set dotenv-load := true
 _default:
     @just --list
 
+# ─── Environment ─────────────────────────────────────────────────────────────
+# ENVS and validation live in scripts/env.sh (single source of truth).
+# Usage as a recipe dependency:  recipe: (_require "PROD")
+[private]
+_require required:
+    bash scripts/env.sh "{{required}}"
+
 # ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 [group('ci')]
@@ -12,69 +19,49 @@ bootstrap:
 
 # ─── App (run inside `nix develop`) ──────────────────────────────────────────
 
+# Targets: web | tauri
 [group('app')]
-[doc('Start Tauri desktop dev window (needs nix develop)')]
-dev:
-    bun run dev
-
-[group('app')]
-[doc('Start Vite dev server only — browser, no Tauri shell')]
-dev-web:
-    bun run dev-web
+[doc('Dev server — just dev web | just dev tauri')]
+dev target="web":
+    #!/usr/bin/env bash
+    case "{{target}}" in
+      web)   bun run dev-web ;;
+      tauri) bun run dev ;;
+      *) printf 'Unknown target "%s". Valid: web | tauri\n' "{{target}}" >&2; exit 1 ;;
+    esac
 
 [group('app')]
 [doc('Install JS dependencies')]
 install:
     bun install
 
-# ─── Build (via Docker — no local Rust/bun needed) ───────────────────────────
-
+# Targets: web | linux | mac | ios
 [group('build')]
-[doc('Build web dist/ in Docker for Cloudflare Pages')]
-build-web:
-    DOCKER_BUILDKIT=1 docker build \
-        --target web \
-        --output type=local,dest=dist \
-        -f Dockerfile .
-    @echo "dist/ ready for 'just deploy-web'"
-
-[group('build')]
-[doc('Build Linux .deb/.AppImage in Docker')]
-build-linux:
-    DOCKER_BUILDKIT=1 docker build \
-        --target linux \
-        --output type=local,dest=bundle \
-        -f Dockerfile .
-    @echo "bundle/ contains .deb and .AppImage"
-
-[group('build')]
-[doc('Build macOS app (run on mac mini, needs nix develop)')]
-build-mac:
-    bun run build-tauri -- --target universal-apple-darwin
-
-[group('build')]
-[doc('Build iOS app (run on mac mini, needs nix develop + Xcode)')]
-build-ios:
-    bunx tauri ios build
+[doc('Build for target — just build web | linux | mac | ios')]
+build target="web":
+    #!/usr/bin/env bash
+    case "{{target}}" in
+      web)
+        DOCKER_BUILDKIT=1 docker build --target web --output type=local,dest=dist -f Dockerfile .
+        echo "dist/ ready for 'just deploy-web'"
+        ;;
+      linux)
+        DOCKER_BUILDKIT=1 docker build --target linux --output type=local,dest=bundle -f Dockerfile .
+        echo "bundle/ contains .deb and .AppImage"
+        ;;
+      mac)   bun run build-tauri -- --target universal-apple-darwin ;;
+      ios)   bunx tauri ios build ;;
+      *) printf 'Unknown target "%s". Valid: web | linux | mac | ios\n' "{{target}}" >&2; exit 1 ;;
+    esac
 
 # ─── Deploy ──────────────────────────────────────────────────────────────────
 
 [group('ci')]
-[doc('Deploy dist/ to Cloudflare Pages')]
-deploy-web: build-web
+[doc('Deploy dist/ to Cloudflare Pages (requires ENV=PROD in .env)')]
+deploy-web: (build "web") (_require "PROD")
     bunx wrangler pages deploy dist/ --project-name z-obd
 
-# ─── Nix ─────────────────────────────────────────────────────────────────────
-
-[group('ci')]
-[doc('Update flake.lock')]
-flake-update:
-    nix flake update
-
-[group('ci')]
-[doc('Check flake outputs')]
-flake-check:
-    nix flake check
+# ─── DropBox ─────────────────────────────────────────────────────────────────────
 
 [group('dropbox')]
 [private]

@@ -100,15 +100,7 @@
               export GDK_BACKEND=x11
             ''}
 
-            echo ""
-            echo "  Z OBD dev shell"
-            echo "  rust  : $(rustc --version 2>/dev/null || echo 'not found')"
-            echo "  bun   : $(bun --version 2>/dev/null || echo 'not found')"
-            echo "  just  : $(just --version 2>/dev/null || echo 'not found')"
-            echo "  uv    : $(uv --version 2>/dev/null || echo 'not found')"
-            echo ""
-            echo "  Run 'just' to list all commands."
-            echo ""
+            set +a && source .env && set -a
           '';
         };
       }

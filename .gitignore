@@ -26,6 +26,7 @@ data/
 .env
 .env.*
 !.env.example
+.direnv/
 
 # Editor
 .DS_Store
