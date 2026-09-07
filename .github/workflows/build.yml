@@ -127,7 +127,12 @@ jobs:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: |
           if [ -n "$APPLE_DEVELOPMENT_TEAM" ]; then
-            sed -i '' "s/\"developmentTeam\": \"\"/\"developmentTeam\": \"$APPLE_DEVELOPMENT_TEAM\"/" src-tauri/tauri.conf.json
+            python3 -c "
+          import json, os
+          conf = json.load(open('src-tauri/tauri.conf.json'))
+          conf['bundle']['iOS']['developmentTeam'] = os.environ['APPLE_DEVELOPMENT_TEAM']
+          json.dump(conf, open('src-tauri/tauri.conf.json', 'w'), indent=2)
+          "
           fi
 
       - name: Install dependencies
