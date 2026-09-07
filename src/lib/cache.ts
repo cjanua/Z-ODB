@@ -1,7 +1,7 @@
 /**
  * IndexedDB persistence layer.
- * Stores per-trip OBD Parquet blobs + small JSON tables so DuckDB
- * (which is in-memory) survives page reloads without re-syncing from Dropbox.
+ * Stores per-trip OBD Parquet blobs + metadata table Parquet snapshots
+ * so DuckDB (which is in-memory) survives page reloads without re-syncing.
  */
 
 const IDB_NAME    = 'z-obd-cache'
@@ -76,13 +76,14 @@ export async function loadAllOBDParquets(): Promise<CachedOBD[]> {
   return idbGetAll<CachedOBD>(await db(), 'obd_parquet')
 }
 
-export async function saveMeta(key: string, data: unknown): Promise<void> {
-  await idbPut(await db(), 'meta', JSON.stringify(data), key)
+export async function saveMetaParquet(key: string, parquet: Uint8Array): Promise<void> {
+  await idbPut(await db(), 'meta', parquet, key)
 }
 
-export async function loadMeta<T>(key: string): Promise<T | null> {
-  const raw = await idbGet<string>(await db(), 'meta', key)
-  return raw ? (JSON.parse(raw) as T) : null
+export async function loadMetaParquet(key: string): Promise<Uint8Array | null> {
+  const raw = await idbGet<Uint8Array>(await db(), 'meta', key)
+  if (!raw || !(raw instanceof Uint8Array)) return null
+  return raw
 }
 
 export async function clearCache(): Promise<void> {

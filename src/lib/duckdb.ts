@@ -4,7 +4,7 @@ import type { OBDRawRow } from './csv-parse'
 import { tripTsToEpochMs, epochMsToDateOrFallback } from './trip-date'
 import {
   clearCache, saveOBDParquet, loadAllOBDParquets,
-  saveMeta, loadMeta,
+  saveMetaParquet, loadMetaParquet,
 } from './cache'
 
 let _db: AsyncDuckDB | null = null
@@ -210,136 +210,42 @@ async function bootstrapSchema(conn: AsyncDuckDBConnection): Promise<void> {
 
 // ─── Cache restore ────────────────────────────────────────────────────────────
 
+const META_TABLES = ['manifest', 'trip_summary', 'pulls', 'accel_runs'] as const
+
 async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): Promise<void> {
-  try {
-    // 1. Re-load per-trip OBD Parquet files
-    const trips = await loadAllOBDParquets()
-    for (const { trip_id, parquet } of trips) {
+  let restored = 0
+
+  // 1. Per-trip OBD Parquet files
+  const trips = await loadAllOBDParquets()
+  for (const { trip_id, parquet } of trips) {
+    try {
       const fname = `${trip_id}_restore.parquet`
       await db.registerFileBuffer(fname, parquet)
       await conn.query(`INSERT INTO obd SELECT * FROM read_parquet('${fname}')`)
       await db.dropFile(fname)
+      restored++
+    } catch (err) {
+      console.warn(`[cache] skip trip ${trip_id}:`, err)
     }
+  }
 
-    // 2. Restore trip_summary from JSON
-    const summary = await loadMeta<Record<string, unknown>[]>('summary')
-    if (summary?.length) {
-      await db.registerFileText('summary_restore.json', JSON.stringify(summary))
-      await conn.query(`
-        INSERT INTO trip_summary
-        SELECT
-          trip_id::VARCHAR,
-          to_timestamp(ts_start_ms::DOUBLE / 1000.0)::TIMESTAMP AS ts_start,
-          TRY_CAST(duration_s        AS DOUBLE),
-          TRY_CAST(miles             AS DOUBLE),
-          TRY_CAST(fuel_gal          AS DOUBLE),
-          TRY_CAST(mpg_trip          AS DOUBLE),
-          TRY_CAST(dfco_pct          AS DOUBLE),
-          TRY_CAST(idle_pct          AS DOUBLE),
-          TRY_CAST(wot_s             AS DOUBLE),
-          TRY_CAST(n_pulls           AS INTEGER),
-          TRY_CAST(max_boost         AS DOUBLE),
-          TRY_CAST(max_rpm           AS DOUBLE),
-          TRY_CAST(max_turbo         AS DOUBLE),
-          TRY_CAST(ltft_b1_med       AS DOUBLE),
-          TRY_CAST(ltft_b2_med       AS DOUBLE),
-          TRY_CAST(stft_iqr_b1       AS DOUBLE),
-          TRY_CAST(stft_iqr_b2       AS DOUBLE),
-          TRY_CAST(timing_wot_floor  AS DOUBLE),
-          TRY_CAST(oil_start_f       AS DOUBLE),
-          TRY_CAST(t_to_oil_180s     AS DOUBLE),
-          TRY_CAST(coolant_max       AS DOUBLE),
-          TRY_CAST(ambient_med       AS DOUBLE),
-          TRY_CAST(shutdown_volts    AS DOUBLE),
-          TRY_CAST(volts_min         AS DOUBLE),
-          TRY_CAST(gps_fix_s         AS DOUBLE),
-          TRY_CAST(pid_hz_med        AS DOUBLE),
-          TRY_CAST(frame_gap_max     AS DOUBLE),
-          era_id::VARCHAR,
-          TRY_CAST(fuel_level_start  AS DOUBLE),
-          TRY_CAST(fuel_level_end    AS DOUBLE),
-          COALESCE(TRY_CAST(is_fragment    AS BOOLEAN), false),
-          TRY_CAST(avg_moving_mph AS DOUBLE),
-          TRY_CAST(accel_pct      AS DOUBLE)
-        FROM read_json_auto('summary_restore.json')
-      `)
-      await db.dropFile('summary_restore.json')
+  // 2. Metadata tables — each independent, Parquet preserves types exactly
+  for (const table of META_TABLES) {
+    try {
+      const buf = await loadMetaParquet(table)
+      if (!buf) continue
+      const fname = `${table}_restore.parquet`
+      await db.registerFileBuffer(fname, buf)
+      await conn.query(`INSERT INTO ${table} SELECT * FROM read_parquet('${fname}')`)
+      await db.dropFile(fname)
+      restored++
+    } catch (err) {
+      console.warn(`[cache] skip ${table}:`, err)
     }
+  }
 
-    // 3. Restore pulls from JSON
-    const pulls = await loadMeta<Record<string, unknown>[]>('pulls')
-    if (pulls?.length) {
-      await db.registerFileText('pulls_restore.json', JSON.stringify(pulls))
-      await conn.query(`
-        INSERT INTO pulls
-        SELECT
-          trip_id::VARCHAR,
-          to_timestamp(t_start_ms::DOUBLE / 1000.0)::TIMESTAMP AS t_start,
-          TRY_CAST(t_rel_start   AS DOUBLE),
-          TRY_CAST(duration_s    AS DOUBLE),
-          TRY_CAST(rpm_min       AS DOUBLE),
-          TRY_CAST(rpm_max       AS DOUBLE),
-          TRY_CAST(peak_boost    AS DOUBLE),
-          TRY_CAST(peak_maf      AS DOUBLE),
-          TRY_CAST(hp_est_peak   AS DOUBLE),
-          TRY_CAST(spool_0_10    AS DOUBLE),
-          TRY_CAST(min_lambda    AS DOUBLE),
-          TRY_CAST(timing_floor  AS DOUBLE),
-          TRY_CAST(peak_turbo_a  AS DOUBLE),
-          TRY_CAST(peak_turbo_b  AS DOUBLE),
-          TRY_CAST(iat_start     AS DOUBLE),
-          TRY_CAST(speed_start   AS DOUBLE),
-          era_id::VARCHAR
-        FROM read_json_auto('pulls_restore.json')
-      `)
-      await db.dropFile('pulls_restore.json')
-    }
-
-    // 4. Restore accel_runs from JSON
-    const accelRuns = await loadMeta<Record<string, unknown>[]>('accel_runs')
-    if (accelRuns?.length) {
-      await db.registerFileText('accel_runs_restore.json', JSON.stringify(accelRuns))
-      await conn.query(`
-        INSERT INTO accel_runs
-        SELECT
-          trip_id::VARCHAR,
-          to_timestamp(t_start_ms::DOUBLE / 1000.0)::TIMESTAMP AS t_start,
-          TRY_CAST(t_rel_start AS DOUBLE),
-          TRY_CAST(t_0_30      AS DOUBLE),
-          TRY_CAST(t_0_60      AS DOUBLE),
-          TRY_CAST(t_30_60     AS DOUBLE),
-          TRY_CAST(peak_speed  AS DOUBLE),
-          era_id::VARCHAR
-        FROM read_json_auto('accel_runs_restore.json')
-      `)
-      await db.dropFile('accel_runs_restore.json')
-    }
-
-    // 5. Restore manifest from JSON
-    const manifest = await loadMeta<Record<string, unknown>[]>('manifest')
-    if (manifest?.length) {
-      await db.registerFileText('manifest_restore.json', JSON.stringify(manifest))
-      await conn.query(`
-        INSERT INTO manifest
-        SELECT
-          trip_id::VARCHAR,
-          to_timestamp(trip_ts_ms::DOUBLE  / 1000.0)::TIMESTAMP AS trip_ts,
-          TRY_CAST(row_count AS INTEGER),
-          to_timestamp(synced_at_ms::DOUBLE / 1000.0)::TIMESTAMP AS synced_at,
-          COALESCE(ts_source::VARCHAR, 'filename'),
-          COALESCE(TRY_CAST(is_fragment AS BOOLEAN), false)
-        FROM read_json_auto('manifest_restore.json')
-      `)
-      await db.dropFile('manifest_restore.json')
-    }
-
-    // A) Fix: if no trips restored, clear stale Dropbox cursor so full re-sync runs
-    if (trips.length === 0) {
-      localStorage.removeItem('dbx_list_cursor')
-    }
-  } catch (err) {
-    console.error('[cache] restore failed, clearing cache:', err)
-    await clearCache()
+  // If nothing was restored, clear cursor so auto-sync does a full re-download
+  if (restored === 0) {
     localStorage.removeItem('dbx_list_cursor')
   }
 }
@@ -348,66 +254,22 @@ async function saveToCache(tripId: string, conn: AsyncDuckDBConnection, db: Asyn
   try {
     const tid = tripId.replace(/'/g, "''")
 
-    // Save OBD Parquet
+    // Per-trip OBD data
     await conn.query(`COPY (SELECT * FROM obd WHERE trip_id = '${tid}') TO 'obd_export.parquet' (FORMAT PARQUET)`)
     const parquet = await db.copyFileToBuffer('obd_export.parquet')
     await db.dropFile('obd_export.parquet')
     await saveOBDParquet(tripId, parquet)
 
-    // Save full summary as JSON (all trips — small table)
-    const summaryRows = await conn.query(`SELECT * FROM trip_summary`)
-    const summaryData = summaryRows.toArray().map(r => {
-      const row = r as Record<string, unknown>
-      const ts = row['ts_start']
-      return {
-        ...row,
-        ts_start_ms: ts instanceof Date ? ts.getTime() : new Date(String(ts ?? 0)).getTime(),
-        ts_start: undefined,
-      }
-    })
-    await saveMeta('summary', summaryData)
-
-    // Save pulls as JSON
-    const pullRows = await conn.query(`SELECT * FROM pulls`)
-    const pullData = pullRows.toArray().map(r => {
-      const row = r as Record<string, unknown>
-      const ts = row['t_start']
-      return {
-        ...row,
-        t_start_ms: ts instanceof Date ? ts.getTime() : new Date(String(ts ?? 0)).getTime(),
-        t_start: undefined,
-      }
-    })
-    await saveMeta('pulls', pullData)
-
-    // Save manifest as JSON
-    const manifestRows = await conn.query(`SELECT * FROM manifest`)
-    const manifestData = manifestRows.toArray().map(r => {
-      const row = r as Record<string, unknown>
-      const tripTs    = row['trip_ts']
-      const syncedAt  = row['synced_at']
-      return {
-        ...row,
-        trip_ts_ms:   tripTs   instanceof Date ? tripTs.getTime()   : new Date(String(tripTs   ?? 0)).getTime(),
-        synced_at_ms: syncedAt instanceof Date ? syncedAt.getTime() : new Date(String(syncedAt ?? 0)).getTime(),
-        trip_ts:   undefined,
-        synced_at: undefined,
-      }
-    })
-    await saveMeta('manifest', manifestData)
-
-    // Save accel_runs as JSON
-    const accelRunRows = await conn.query(`SELECT * FROM accel_runs`)
-    const accelRunData = accelRunRows.toArray().map(r => {
-      const row = r as Record<string, unknown>
-      const ts = row['t_start']
-      return {
-        ...row,
-        t_start_ms: ts instanceof Date ? ts.getTime() : new Date(String(ts ?? 0)).getTime(),
-        t_start: undefined,
-      }
-    })
-    await saveMeta('accel_runs', accelRunData)
+    // Metadata tables — Parquet preserves types exactly, no conversion needed
+    for (const table of META_TABLES) {
+      const count = await conn.query(`SELECT count(*) as n FROM ${table}`)
+      if (Number(count.toArray()[0]?.['n'] ?? 0) === 0) continue
+      const fname = `${table}_save.parquet`
+      await conn.query(`COPY (SELECT * FROM ${table}) TO '${fname}' (FORMAT PARQUET)`)
+      const buf = await db.copyFileToBuffer(fname)
+      await db.dropFile(fname)
+      await saveMetaParquet(table, buf)
+    }
   } catch (err) {
     console.warn('[cache] save failed:', err)
   }
