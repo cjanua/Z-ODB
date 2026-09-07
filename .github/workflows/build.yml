@@ -2,104 +2,142 @@ name: Build & Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ─── Web (Cloudflare Pages) ─────────────────────────────────────────────────
+  # ─── Web (GitHub Pages) ────────────────────────────────────────────────────
   web:
     name: Web — build & deploy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build web dist/ via Docker
-        run: |
-          docker build \
-            --target web \
-            --output type=local,dest=dist \
-            -f Dockerfile .
-
-      - name: Deploy to Cloudflare Pages
-        if: github.ref == 'refs/heads/main'
-        uses: cloudflare/wrangler-action@v3
+      - uses: oven-sh/setup-bun@v2
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist/ --project-name z-obd
+          bun-version: latest
 
-  # ─── Linux desktop (.deb / .AppImage) ───────────────────────────────────────
-  desktop-linux:
-    name: Linux desktop — .deb + .AppImage
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        env:
+          VITE_DROPBOX_APP_KEY: ${{ secrets.VITE_DROPBOX_APP_KEY }}
+          VITE_DROPBOX_FOLDER: ${{ secrets.VITE_DROPBOX_FOLDER }}
+          VITE_APP_BASE: /Z-ODB/
+        run: bun run build && cp dist/index.html dist/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+  deploy-pages:
+    needs: web
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/deploy-pages@v4
+        id: deployment
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+  # ─── Shared setup for self-hosted mac mini ───────────────────────────────
+  # Prerequisites (one-time, needs admin):
+  #   1. Install Xcode from App Store
+  #   2. sudo xcodebuild -license accept
+  #   3. xcodebuild -downloadPlatform iOS
+  # Everything below is auto-bootstrapped by CI, no sudo needed.
 
-      - name: Build Linux bundle via Docker
-        run: |
-          docker build \
-            --target linux \
-            --output type=local,dest=bundle \
-            -f Dockerfile .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-bundle
-          path: bundle/
-          retention-days: 14
-
-  # ─── macOS desktop (mac mini self-hosted runner) ─────────────────────────────
+  # ─── macOS desktop (mac mini self-hosted runner) ─────────────────────────
   desktop-mac:
     name: macOS desktop
-    runs-on: [self-hosted, macOS]
-    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, X64]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enter Nix dev shell and build
+      - name: Bootstrap Rust (no sudo)
         run: |
-          nix develop --command sh -c "
-            bun install --frozen-lockfile
-            bun run build
-            cargo install tauri-cli --version '^2' --locked
-            cargo tauri build --target universal-apple-darwin
-          "
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          source "$HOME/.cargo/env"
+          rustup update stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build macOS app
+        run: |
+          source "$HOME/.cargo/env"
+          bunx tauri build
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-bundle
-          path: src-tauri/target/universal-apple-darwin/release/bundle/
+          path: src-tauri/target/release/bundle/
           retention-days: 14
 
-  # ─── iOS (mac mini self-hosted runner) ───────────────────────────────────────
+  # ─── iOS (mac mini self-hosted runner) ───────────────────────────────────
   ios:
     name: iOS
-    runs-on: [self-hosted, macOS]
-    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, X64]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enter Nix dev shell and build iOS
+      - name: Preflight — verify Xcode + iOS SDK
         run: |
-          nix develop --command sh -c "
-            bun install --frozen-lockfile
-            bun run build
-            cargo install tauri-cli --version '^2' --locked
-            bunx tauri ios build
-          "
+          xcode-select -p || { echo "::error::Xcode not installed. Run: xcode-select --install && install Xcode from App Store"; exit 1; }
+          xcodebuild -showsdks 2>/dev/null | grep -q iphoneos || { echo "::error::iOS SDK missing. Run: xcodebuild -downloadPlatform iOS"; exit 1; }
+
+      - name: Bootstrap Rust + iOS targets (no sudo)
+        run: |
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          source "$HOME/.cargo/env"
+          rustup update stable
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Inject development team
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          if [ -n "$APPLE_DEVELOPMENT_TEAM" ]; then
+            sed -i '' "s/\"developmentTeam\": \"\"/\"developmentTeam\": \"$APPLE_DEVELOPMENT_TEAM\"/" src-tauri/tauri.conf.json
+          fi
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build iOS
+        run: |
+          source "$HOME/.cargo/env"
+          bunx tauri ios init
+          bunx tauri ios build
 
       - name: Upload iOS artifacts
         uses: actions/upload-artifact@v4

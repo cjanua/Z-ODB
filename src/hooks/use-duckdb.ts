@@ -16,14 +16,11 @@ export function useDuckDB() {
 
   useEffect(() => {
     let cancelled = false
-    console.log('[duckdb] init starting…')
     initDuckDB()
       .then(instance => {
-        console.log('[duckdb] init OK')
         if (!cancelled) { setDb(instance); setReady(true) }
       })
       .catch(e => {
-        console.error('[duckdb] init FAILED:', e)
         if (!cancelled) setError(String(e))
       })
     return () => { cancelled = true }
