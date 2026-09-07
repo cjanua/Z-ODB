@@ -12,7 +12,7 @@ function RootLayout() {
   const navigate = useNavigate()
   const onAuthRoute = pathname.startsWith('/auth')
 
-  // In Tauri: listen for z://auth/callback deep link and route to callback page
+  // Tauri: listen for z://auth/callback deep link
   useEffect(() => {
     if (!isTauri()) return
     let unlisten: (() => void) | undefined
@@ -24,6 +24,20 @@ function RootLayout() {
       }).then(fn => { unlisten = fn })
     })
     return () => unlisten?.()
+  }, [navigate])
+
+  // Web (hash routing): Dropbox redirects to /auth/callback?code=ABC as a real URL.
+  // GitHub Pages serves 404.html (= index.html) for that path, so the app loads
+  // with the code in window.location.search rather than in the hash.
+  // Bridge it into the hash router here.
+  useEffect(() => {
+    if (isTauri()) return
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    if (code) {
+      window.history.replaceState({}, '', window.location.pathname)
+      void navigate({ to: '/auth/callback', search: { code } })
+    }
   }, [navigate])
 
   if (onAuthRoute) return <Outlet />

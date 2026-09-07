@@ -48,6 +48,6 @@ export default defineConfig(({ command }) => ({
     },
   },
 
-  // Tauri uses file:// on desktop — no need for a base path
-  base: command === 'build' ? './' : '/',
+  // VITE_APP_BASE lets CI set /Z-ODB/ for GitHub Pages; Tauri keeps ./
+  base: process.env['VITE_APP_BASE'] ?? (command === 'build' ? './' : '/'),
 }))

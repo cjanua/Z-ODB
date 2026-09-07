@@ -16,5 +16,7 @@ export const isWeb = (): boolean => !isTauri()
  */
 export function getRedirectUri(): string {
   if (isTauri()) return 'z://auth/callback'
-  return `${window.location.origin}/auth/callback`
+  // BASE_URL is set by Vite from the `base` config (e.g. '/Z-ODB/' on GH Pages)
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  return `${window.location.origin}${base}/auth/callback`
 }
