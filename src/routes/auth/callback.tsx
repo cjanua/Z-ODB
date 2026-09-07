@@ -14,11 +14,9 @@ function CallbackPage() {
       return
     }
 
-    handleCode(code).then(() => {
-      void navigate({ to: '/dashboard' })
-    }).catch(() => {
-      // error is set by hook
-    })
+    handleCode(code).then(ok => {
+      if (ok) void navigate({ to: '/dashboard' })
+    }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

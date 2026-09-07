@@ -31,15 +31,17 @@ export function useDropbox(): UseDropbox {
     setAuthed(false)
   }, [])
 
-  const handleCode = useCallback(async (code: string) => {
+  const handleCode = useCallback(async (code: string): Promise<boolean> => {
     setLoading(true)
     setError(null)
     try {
       const tokens = await exchangeCode(code)
       saveTokens(tokens)
       setAuthed(true)
+      return true
     } catch (e) {
       setError(String(e))
+      return false
     } finally {
       setLoading(false)
     }
