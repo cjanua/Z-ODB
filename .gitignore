@@ -37,3 +37,5 @@ data/
 
 # TanStack Router regenerates this on dev start; track the placeholder
 # src/routeTree.gen.ts
+.claude/
+.playwright-cli/

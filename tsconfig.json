@@ -27,5 +27,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "src-tauri/src", "vite.config.ts", "tailwind.config.ts"]
+  "include": ["src", "src-tauri/src", "vite.config.ts", "tailwind.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }

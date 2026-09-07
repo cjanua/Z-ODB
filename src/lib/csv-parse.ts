@@ -71,12 +71,8 @@ function findCol(headers: string[], ...candidates: string[]): string | undefined
 
 // ─── Timestamp parsing ───────────────────────────────────────────────────────
 
-export function deriveTripTs(stem: string): Date {
-  const m = stem.match(/CSVLog_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/)
-  if (!m) throw new Error(`Cannot parse timestamp from: ${stem}`)
-  // OBD Fusion writes local time in the filename — use local Date constructor
-  return new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!)
-}
+import { tripTsFromFilename } from './trip-date'
+export { tripTsFromFilename as deriveTripTs }
 
 export function stemFromFilename(filename: string): string {
   return filename.replace(/\.csv$/i, '').replace(/^.*\//, '')
@@ -142,7 +138,7 @@ export function parseOBDCsv(csvText: string, tripId: string): ParseResult {
   let startTime: Date
   let ts_source: ParseResult['ts_source']
   try {
-    startTime = deriveTripTs(tripId)
+    startTime = tripTsFromFilename(tripId)
     ts_source = 'filename'
   } catch {
     // Fallback: parse StartTime comment on line 0 (strip BOM first)

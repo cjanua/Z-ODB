@@ -1,6 +1,7 @@
 import * as duckdb from '@duckdb/duckdb-wasm'
 import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm'
 import type { OBDRawRow } from './csv-parse'
+import { tripTsToEpochMs, epochMsToDateOrFallback } from './trip-date'
 import {
   clearCache, saveOBDParquet, loadAllOBDParquets,
   saveMeta, loadMeta,
@@ -843,10 +844,10 @@ export async function insertTrip(
   `)
 
   // Upsert manifest (with ts_source + is_fragment from trip_summary)
-  const ts = tripTs.toISOString().replace('T', ' ').replace('Z', '')
+  const tsEpoch = tripTsToEpochMs(tripTs)
   await conn.query(`
     INSERT OR REPLACE INTO manifest (trip_id, trip_ts, row_count, synced_at, ts_source, is_fragment)
-    SELECT '${tid}', TIMESTAMP '${ts}', ${rows.length}, now(), '${ts_source}',
+    SELECT '${tid}', epoch_ms(${tsEpoch}::BIGINT), ${rows.length}, now(), '${ts_source}',
       COALESCE((SELECT is_fragment FROM trip_summary WHERE trip_id = '${tid}'), false)
   `)
 
@@ -876,7 +877,7 @@ export async function getManifest(): Promise<ManifestRow[]> {
   await conn.close()
   return result.toArray().map((r: Record<string, unknown>) => ({
     trip_id:   String(r['trip_id']),
-    trip_ts:   new Date(Number(r['trip_ts'])),
+    trip_ts:   epochMsToDateOrFallback(r['trip_ts'], String(r['trip_id'])),
     row_count: Number(r['row_count']),
     synced_at: new Date(Number(r['synced_at'])),
   }))
@@ -948,7 +949,7 @@ function rowToSummary(r: Record<string, unknown>): TripSummary {
   const n = (k: string) => r[k] != null ? Number(r[k]) : null
   return {
     trip_id:          String(r['trip_id']),
-    ts_start:         new Date(Number(r['ts_start'])),
+    ts_start:         epochMsToDateOrFallback(r['ts_start'], String(r['trip_id'])),
     duration_s:       Number(r['duration_s'] ?? 0),
     miles:            n('miles'),
     fuel_gal:         n('fuel_gal'),
@@ -1041,7 +1042,7 @@ export async function getPulls(tripId?: string): Promise<PullRecord[]> {
     const n = (k: string) => r[k] != null ? Number(r[k]) : null
     return {
       trip_id:      String(r['trip_id']),
-      t_start:      new Date(Number(r['t_start'])),
+      t_start:      epochMsToDateOrFallback(r['t_start'], String(r['trip_id'])),
       t_rel_start:  Number(r['t_rel_start'] ?? 0),
       duration_s:   Number(r['duration_s'] ?? 0),
       rpm_min:      n('rpm_min'),
@@ -1084,7 +1085,7 @@ export async function getAccelRuns(tripId?: string): Promise<AccelRun[]> {
     const n = (k: string) => r[k] != null ? Number(r[k]) : null
     return {
       trip_id:     String(r['trip_id']),
-      t_start:     new Date(Number(r['t_start'])),
+      t_start:     epochMsToDateOrFallback(r['t_start'], String(r['trip_id'])),
       t_rel_start: Number(r['t_rel_start'] ?? 0),
       t_0_30:      n('t_0_30'),
       t_0_60:      n('t_0_60'),

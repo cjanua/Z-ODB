@@ -28,7 +28,11 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
       case 'downloading': return `↓ ${progress.current ?? ''}…`
       case 'inserting':   return `Processing…`
       case 'done':        return `Synced ${progress.completed} trip${progress.completed === 1 ? '' : 's'}`
-      case 'error':       return progress.error ? `Sync failed: ${progress.error}` : 'Sync failed'
+      case 'error': {
+        if (!progress.error) return 'Sync failed'
+        const short = progress.error.length > 60 ? progress.error.slice(0, 60) + '…' : progress.error
+        return `Sync failed: ${short}`
+      }
     }
   }
 

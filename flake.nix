@@ -18,7 +18,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) nixgl.overlay ];
-        pkgs = import nixpkgs { inherit system overlays; };
+        pkgs = import nixpkgs { localSystem.system = system; inherit overlays; };
 
         # ── Rust toolchains ────────────────────────────────────────────────────
 
@@ -129,10 +129,13 @@
             watchexec
             tmux
             pkgs.nixgl.nixGLIntel
+            playwright-driver
           ] ++ linuxDeps ++ macosDeps;
 
           shellHook = ''
             export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
               export WEBKIT_DISABLE_COMPOSITING_MODE=1
               export WEBKIT_DISABLE_DMABUF_RENDERER=1

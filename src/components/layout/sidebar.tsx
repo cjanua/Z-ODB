@@ -6,6 +6,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useDropbox } from '@/hooks/use-dropbox'
 import { Button } from '@/components/ui/button'
+import { VinSelector } from '@/components/layout/vin-selector'
 
 interface NavItem {
   to:    string
@@ -25,7 +26,12 @@ const NAV: NavItem[] = [
   { to: '/quality',     label: 'Data Quality',  icon: ShieldCheck  },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  open: boolean
+  onClose: () => void
+}
+
+export function Sidebar({ open, onClose }: SidebarProps) {
   const { logout } = useDropbox()
   const navigate = useNavigate()
 
@@ -35,46 +41,59 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-52 flex-col border-r bg-card shrink-0">
-      {/* Logo */}
-      <div className="flex items-center gap-2 px-4 py-4 border-b">
-        <Car className="h-5 w-5 text-primary" />
-        <span className="font-semibold tracking-tight">Z OBD</span>
-      </div>
+    <>
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={onClose}
+        />
+      )}
+      <aside className={cn(
+        'flex h-screen w-52 flex-col border-r bg-card shrink-0',
+        'fixed inset-y-0 left-0 z-50 transition-transform duration-200 md:static md:translate-x-0',
+        open ? 'translate-x-0' : '-translate-x-full',
+      )}>
+        <div className="flex items-center gap-2 px-4 py-4 border-b">
+          <Car className="h-5 w-5 text-primary" />
+          <span className="font-semibold tracking-tight">Z OBD</span>
+        </div>
 
-      {/* Nav */}
-      <nav className="flex-1 space-y-0.5 p-2 overflow-y-auto">
-        {NAV.map(({ to, label, icon: Icon }) => (
-          <Link key={to} to={to}>
-            {({ isActive }) => (
-              <span
-                className={cn(
-                  'flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors',
-                  isActive
-                    ? 'bg-accent text-accent-foreground font-medium'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {label}
-              </span>
-            )}
-          </Link>
-        ))}
-      </nav>
+        <div className="border-b">
+          <VinSelector onSwitch={() => window.location.reload()} />
+        </div>
 
-      {/* Footer */}
-      <div className="border-t p-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-start gap-3 text-muted-foreground"
-          onClick={handleLogout}
-        >
-          <LogOut className="h-4 w-4" />
-          Sign out
-        </Button>
-      </div>
-    </aside>
+        <nav className="flex-1 space-y-0.5 p-2 overflow-y-auto">
+          {NAV.map(({ to, label, icon: Icon }) => (
+            <Link key={to} to={to} onClick={onClose}>
+              {({ isActive }) => (
+                <span
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors',
+                    isActive
+                      ? 'bg-accent text-accent-foreground font-medium'
+                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {label}
+                </span>
+              )}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="border-t p-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start gap-3 text-muted-foreground"
+            onClick={handleLogout}
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </Button>
+        </div>
+      </aside>
+    </>
   )
 }

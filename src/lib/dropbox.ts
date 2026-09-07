@@ -215,6 +215,35 @@ export async function listNewEntries(folder: string): Promise<{
   return { entries: result.entries, cursor: result.cursor }
 }
 
+// ─── Folder listing (for VIN discovery) ─────────────────────────────────────
+
+export async function listSubfolders(path: string): Promise<string[]> {
+  const result = await rpc<{ entries: DropboxEntry[] }>('/files/list_folder', {
+    path,
+    recursive: false,
+  })
+  return result.entries
+    .filter(e => e['.tag'] === 'folder')
+    .map(e => e.name)
+}
+
+// ─── Space usage ────────────────────────────────────────────────────────────
+
+export interface SpaceUsage {
+  used:       number
+  allocated:  number
+}
+
+export async function getSpaceUsage(): Promise<SpaceUsage> {
+  const data = await rpc<{
+    used: number
+    allocation: { '.tag': string; allocated?: number; individual?: { allocated: number } }
+  }>('/users/get_space_usage', null)
+  const alloc = data.allocation
+  const allocated = alloc.allocated ?? alloc.individual?.allocated ?? 0
+  return { used: data.used, allocated }
+}
+
 /** Download a single file as text. */
 export async function downloadFile(path: string): Promise<string> {
   const token = getAccessToken()

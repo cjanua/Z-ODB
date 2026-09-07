@@ -14,12 +14,4 @@ export function formatDuration(seconds: number): string {
   return `${s}s`
 }
 
-export function formatDate(ts: Date | string): string {
-  return new Date(ts).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+export { formatTripDate as formatDate } from './trip-date'

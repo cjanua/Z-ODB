@@ -1,11 +1,95 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useTripSummaries } from '@/hooks/use-duckdb'
+import { Progress } from '@/components/ui/progress'
+import { useTripSummaries, useManifest } from '@/hooks/use-duckdb'
+import { getSpaceUsage } from '@/lib/dropbox'
 import { formatDate } from '@/lib/utils'
 
 function fmt(v: number | null | undefined, dec = 1, unit = ''): string {
   if (v == null) return '—'
   return `${v.toFixed(dec)}${unit}`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
+function SpaceCard() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['dropbox-space'],
+    queryFn: getSpaceUsage,
+    staleTime: 5 * 60_000,
+  })
+
+  const pct = data ? (data.used / data.allocated) * 100 : 0
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Dropbox Storage</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading && <p className="text-sm text-muted-foreground">Checking…</p>}
+        {error && <p className="text-sm text-red-400">Failed to fetch usage</p>}
+        {data && (
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span>{formatBytes(data.used)} used</span>
+              <span>{formatBytes(data.allocated)} total</span>
+            </div>
+            <Progress
+              value={Math.min(pct, 100)}
+              className={`h-3 ${pct > 90 ? '[&>div]:bg-red-500' : pct > 75 ? '[&>div]:bg-yellow-500' : '[&>div]:bg-blue-500'}`}
+            />
+            <p className="text-xs text-muted-foreground text-right">
+              {pct.toFixed(1)}% used · {formatBytes(data.allocated - data.used)} free
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function SyncStatsCard() {
+  const { trips } = useManifest()
+  const { summaries } = useTripSummaries(true)
+
+  const totalRows = trips.reduce((s, t) => s + t.row_count, 0)
+  const fragments = summaries.filter(s => s.is_fragment).length
+  const fullTrips = summaries.length - fragments
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Sync Stats</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <p className="text-muted-foreground">Trips synced</p>
+            <p className="text-lg font-semibold">{fullTrips}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Fragments</p>
+            <p className="text-lg font-semibold">{fragments}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Total data rows</p>
+            <p className="text-lg font-semibold">{totalRows.toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">CSV files</p>
+            <p className="text-lg font-semibold">{trips.length}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 function QualityPage() {
@@ -16,8 +100,13 @@ function QualityPage() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Data Quality</h2>
         <p className="text-muted-foreground text-sm mt-1">
-          <abbr title="Parameter ID (OBD-II data channel)">PID</abbr> rate · Frame gaps · <abbr title="Global Positioning System">GPS</abbr> quality · Dead channels
+          Storage · Sync stats · <abbr title="Parameter ID (OBD-II data channel)">PID</abbr> rate · Frame gaps · <abbr title="Global Positioning System">GPS</abbr> quality
         </p>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <SpaceCard />
+        <SyncStatsCard />
       </div>
 
       {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -67,9 +156,6 @@ function QualityPage() {
               </table>
             </div>
           )}
-          <p className="text-xs text-muted-foreground mt-3">
-            Dead-channel detection (per-trip × channel matrix) requires per-trip channel scan — coming next.
-          </p>
         </CardContent>
       </Card>
     </div>
