@@ -39,12 +39,15 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
   const label = statusLabel()
 
   return (
-    <div className={cn('flex items-center gap-2', className)}>
+    <div className={cn('flex items-center gap-2 min-w-0', className)}>
       {label && (
-        <span className={cn(
-          'text-xs text-muted-foreground break-all max-w-xs',
-          progress?.phase === 'error' && 'text-red-400',
-        )}>
+        <span
+          className={cn(
+            'text-xs text-muted-foreground truncate hidden md:inline',
+            progress?.phase === 'error' && 'text-red-400',
+          )}
+          title={progress?.error ?? label}
+        >
           {label}
         </span>
       )}
@@ -53,22 +56,21 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
         size="sm"
         disabled={syncing}
         onClick={onSync}
-        className="flex items-center gap-1.5"
+        className="flex items-center gap-1.5 shrink-0"
       >
         {statusIcon()}
-        {!syncing && 'Sync'}
+        <span className="hidden sm:inline">{!syncing && 'Sync'}</span>
       </Button>
       {onRebuild && (
         <Button
           variant="ghost"
-          size="sm"
+          size="icon"
           disabled={syncing}
           onClick={onRebuild}
           title="Wipe all data and re-ingest from Dropbox"
-          className="flex items-center gap-1.5 text-muted-foreground"
+          className="shrink-0 text-muted-foreground"
         >
           <RotateCcw className="h-4 w-4" />
-          Rebuild
         </Button>
       )}
     </div>

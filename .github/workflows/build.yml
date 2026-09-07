@@ -89,11 +89,15 @@ jobs:
           source "$HOME/.cargo/env"
           bunx tauri build
 
+      - name: Compress macOS bundle
+        run: tar -czf macos-bundle.tar.gz -C src-tauri/target/release/bundle .
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-bundle
-          path: src-tauri/target/release/bundle/
+          path: macos-bundle.tar.gz
+          compression-level: 0
           retention-days: 14
 
   # ─── iOS (mac mini self-hosted runner) ───────────────────────────────────
@@ -144,9 +148,13 @@ jobs:
           bunx tauri ios init
           bunx tauri ios build
 
+      - name: Compress iOS bundle
+        run: tar -czf ios-bundle.tar.gz -C src-tauri/gen/apple/build .
+
       - name: Upload iOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ios-bundle
-          path: src-tauri/gen/apple/build/
+          path: ios-bundle.tar.gz
+          compression-level: 0
           retention-days: 14
