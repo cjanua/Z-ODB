@@ -8,6 +8,7 @@ dist/
 
 # Tauri build artifacts
 src-tauri/target/
+src-tauri/gen/schemas/
 *.deb
 *.AppImage
 *.dmg

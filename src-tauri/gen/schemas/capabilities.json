@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default capabilities for Z OBD Dashboard","local":true,"windows":["main"],"permissions":["core:default","fs:default","shell:default","shell:allow-open","deep-link:default"]}}
