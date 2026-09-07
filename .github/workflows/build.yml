@@ -73,9 +73,11 @@ jobs:
         run: |
           if ! command -v rustup &>/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          else
+            echo "rustup already installed, skipping download"
           fi
           source "$HOME/.cargo/env"
-          rustup update stable
+          rustc --version && cargo --version
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -117,10 +119,12 @@ jobs:
         run: |
           if ! command -v rustup &>/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          else
+            echo "rustup already installed, skipping download"
           fi
           source "$HOME/.cargo/env"
-          rustup update stable
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          rustc --version && cargo --version
 
       - uses: oven-sh/setup-bun@v2
         with:
