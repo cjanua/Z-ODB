@@ -33,7 +33,7 @@ function RootLayout() {
 }
 
 function AuthenticatedShell() {
-  const { ready }   = useDuckDB()
+  const { ready, error: dbError } = useDuckDB()
   const invalidate  = useInvalidateDuckDB()
   const rebuild     = useRebuild()
   const { progress, syncing, sync } = useSync(invalidate)
@@ -41,13 +41,22 @@ function AuthenticatedShell() {
   // Auto-sync once after DuckDB is ready
   const didAutoSync = useRef(false)
   useEffect(() => {
-    console.log('[root] duckdb ready:', ready, 'didAutoSync:', didAutoSync.current)
     if (ready && !didAutoSync.current) {
       didAutoSync.current = true
-      console.log('[root] triggering auto-sync')
       void sync()
     }
   }, [ready, sync])
+
+  if (dbError) {
+    return (
+      <div className="flex h-screen items-center justify-center p-6">
+        <div className="text-center max-w-md">
+          <p className="text-red-400 font-medium">DuckDB failed to initialize</p>
+          <p className="text-xs text-muted-foreground mt-2 break-all">{dbError}</p>
+        </div>
+      </div>
+    )
+  }
 
   async function handleRebuild() {
     await rebuild()

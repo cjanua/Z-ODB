@@ -28,7 +28,7 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
       case 'downloading': return `↓ ${progress.current ?? ''}…`
       case 'inserting':   return `Processing…`
       case 'done':        return `Synced ${progress.completed} trip${progress.completed === 1 ? '' : 's'}`
-      case 'error':       return 'Sync failed'
+      case 'error':       return progress.error ? `Sync failed: ${progress.error}` : 'Sync failed'
     }
   }
 
@@ -38,7 +38,7 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
     <div className={cn('flex items-center gap-2', className)}>
       {label && (
         <span className={cn(
-          'text-xs text-muted-foreground truncate max-w-48',
+          'text-xs text-muted-foreground break-all max-w-xs',
           progress?.phase === 'error' && 'text-red-400',
         )}>
           {label}
