@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { runSync, type SyncProgress } from '@/lib/sync'
 
-const DROPBOX_FOLDER = import.meta.env['VITE_DROPBOX_FOLDER'] as string ?? '/Apps/OBD Fusion'
+const DROPBOX_FOLDER = import.meta.env['VITE_DROPBOX_FOLDER'] as string || '/Apps/OBD Fusion'
 
 export function useSync(onComplete?: () => void) {
   const [progress, setProgress] = useState<SyncProgress | null>(null)
