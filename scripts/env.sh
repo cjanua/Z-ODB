@@ -11,7 +11,7 @@
 # On success: exits 0, ENVS and ENV are set in the caller's scope (when sourced).
 # On failure: prints an error to stderr and exits 1.
 
-declare -r -a ENVS=("DEV" "RUNNER" "PROD")
+declare -r -a ENVS=("DEV" "BUILD" "PROD")
 
 # ── Validate ENV ∈ ENVS ───────────────────────────────────────────────────────
 

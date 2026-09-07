@@ -1,16 +1,17 @@
-import { RefreshCw, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertCircle, Loader2, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { useSync } from '@/hooks/use-sync'
+import type { SyncProgress } from '@/lib/sync'
 
 interface SyncStatusProps {
-  onSynced?: () => void
+  progress:   SyncProgress | null
+  syncing:    boolean
+  onSync:     () => void
+  onRebuild?: () => void
   className?: string
 }
 
-export function SyncStatus({ onSynced, className }: SyncStatusProps) {
-  const { progress, syncing, sync } = useSync(onSynced)
-
+export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: SyncStatusProps) {
   const statusIcon = () => {
     if (!progress) return <RefreshCw className="h-4 w-4" />
     switch (progress.phase) {
@@ -21,34 +22,51 @@ export function SyncStatus({ onSynced, className }: SyncStatusProps) {
   }
 
   const statusLabel = () => {
-    if (!progress) return 'Sync'
+    if (!progress) return null
     switch (progress.phase) {
       case 'listing':     return 'Checking Dropbox…'
-      case 'downloading': return `Downloading ${progress.current ?? ''}…`
-      case 'inserting':   return `Processing ${progress.current ?? ''}…`
+      case 'downloading': return `↓ ${progress.current ?? ''}…`
+      case 'inserting':   return `Processing…`
       case 'done':        return `Synced ${progress.completed} trip${progress.completed === 1 ? '' : 's'}`
       case 'error':       return 'Sync failed'
     }
   }
 
+  const label = statusLabel()
+
   return (
     <div className={cn('flex items-center gap-2', className)}>
-      <span className={cn(
-        'text-xs text-muted-foreground truncate max-w-40',
-        progress?.phase === 'error' && 'text-red-400',
-      )}>
-        {statusLabel()}
-      </span>
+      {label && (
+        <span className={cn(
+          'text-xs text-muted-foreground truncate max-w-48',
+          progress?.phase === 'error' && 'text-red-400',
+        )}>
+          {label}
+        </span>
+      )}
       <Button
         variant="outline"
         size="sm"
         disabled={syncing}
-        onClick={() => void sync()}
+        onClick={onSync}
         className="flex items-center gap-1.5"
       >
         {statusIcon()}
         {!syncing && 'Sync'}
       </Button>
+      {onRebuild && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={syncing}
+          onClick={onRebuild}
+          title="Wipe all data and re-ingest from Dropbox"
+          className="flex items-center gap-1.5 text-muted-foreground"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Rebuild
+        </Button>
+      )}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { getRedirectUri } from './platform'
+import { getRedirectUri, isTauri } from './platform'
 
 const CLIENT_ID = import.meta.env['VITE_DROPBOX_APP_KEY'] as string
 
@@ -42,7 +42,15 @@ export async function startOAuthFlow(): Promise<void> {
     token_access_type:     'offline',
   })
 
-  window.location.href = `${AUTH_URL}?${params}`
+  const url = `${AUTH_URL}?${params}`
+
+  if (isTauri()) {
+    // Open in the system browser; deep link z://auth/callback will bring us back
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(url)
+  } else {
+    window.location.href = url
+  }
 }
 
 export interface TokenResponse {
@@ -91,10 +99,29 @@ export function getAccessToken(): string | null {
 }
 
 export function isAuthenticated(): boolean {
+  // Has refresh token → can always get a new access token
+  if (localStorage.getItem(KEYS.refresh)) return true
   const token  = localStorage.getItem(KEYS.access)
   const expiry = localStorage.getItem(KEYS.expiry)
   if (!token || !expiry) return false
   return Date.now() < parseInt(expiry) - 60_000
+}
+
+async function refreshAccessToken(): Promise<void> {
+  const refreshToken = localStorage.getItem(KEYS.refresh)
+  if (!refreshToken) throw new Error('No refresh token stored')
+
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type:    'refresh_token',
+      refresh_token: refreshToken,
+      client_id:     CLIENT_ID,
+    }),
+  })
+  if (!res.ok) throw new Error(`Token refresh failed: ${await res.text()}`)
+  saveTokens(await res.json() as TokenResponse)
 }
 
 export function clearTokens(): void {
@@ -103,9 +130,9 @@ export function clearTokens(): void {
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
 
-async function rpc<T>(endpoint: string, body: unknown): Promise<T> {
+async function apiFetch(endpoint: string, body: unknown): Promise<Response> {
   const token = getAccessToken()
-  const res = await fetch(`${API_URL}${endpoint}`, {
+  return fetch(`${API_URL}${endpoint}`, {
     method: 'POST',
     headers: {
       Authorization:  `Bearer ${token}`,
@@ -113,6 +140,23 @@ async function rpc<T>(endpoint: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   })
+}
+
+async function rpc<T>(endpoint: string, body: unknown): Promise<T> {
+  // Proactively refresh if access token is expired but we have a refresh token
+  const expiry = localStorage.getItem(KEYS.expiry)
+  if (expiry && Date.now() >= parseInt(expiry) - 60_000) {
+    await refreshAccessToken()
+  }
+
+  let res = await apiFetch(endpoint, body)
+
+  // Retry once on 401 (token may have been invalidated server-side)
+  if (res.status === 401) {
+    await refreshAccessToken()
+    res = await apiFetch(endpoint, body)
+  }
+
   if (!res.ok) throw new Error(`Dropbox API error ${res.status}: ${await res.text()}`)
   return res.json() as Promise<T>
 }

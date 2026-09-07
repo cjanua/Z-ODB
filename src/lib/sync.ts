@@ -4,7 +4,7 @@
  */
 
 import { listNewEntries, downloadFile, type DropboxEntry } from './dropbox'
-import { parseOBDCsv, stemFromFilename, deriveTripTs } from './csv-parse'
+import { parseOBDCsv, stemFromFilename } from './csv-parse'
 import { insertTrip, hasTripInManifest } from './duckdb'
 
 const CSV_LOG_PATTERN = /^CSVLog_\d{8}_\d{6}\.csv$/i
@@ -71,9 +71,8 @@ export async function runSync(
     onProgress({ phase: 'inserting', total, completed, current: entry.name })
 
     try {
-      const tripTs = deriveTripTs(tripId)
-      const rows   = parseOBDCsv(csvText, tripId)
-      await insertTrip(tripId, tripTs, rows)
+      const parsed = parseOBDCsv(csvText, tripId)
+      await insertTrip(tripId, parsed.startTime, parsed.rows, parsed.shutdownVolts, parsed.ts_source)
     } catch (err) {
       console.error(`Failed to insert ${entry.name}:`, err)
     }
