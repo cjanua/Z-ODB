@@ -7,7 +7,7 @@ export interface UseDropbox {
   error:        string | null
   login:        () => Promise<void>
   logout:       () => void
-  handleCode:   (code: string) => Promise<void>
+  handleCode:   (code: string) => Promise<boolean>
 }
 
 export function useDropbox(): UseDropbox {
