@@ -41,8 +41,10 @@ function AuthenticatedShell() {
   // Auto-sync once after DuckDB is ready
   const didAutoSync = useRef(false)
   useEffect(() => {
+    console.log('[root] duckdb ready:', ready, 'didAutoSync:', didAutoSync.current)
     if (ready && !didAutoSync.current) {
       didAutoSync.current = true
+      console.log('[root] triggering auto-sync')
       void sync()
     }
   }, [ready, sync])
