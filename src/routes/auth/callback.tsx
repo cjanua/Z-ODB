@@ -6,12 +6,9 @@ import { useDropbox } from '@/hooks/use-dropbox'
 function CallbackPage() {
   const navigate = useNavigate()
   const { handleCode, error } = useDropbox()
+  const { code } = Route.useSearch()
 
   useEffect(() => {
-    // Parse ?code= from the URL (web) or z://auth/callback?code= (Tauri deep link)
-    const params = new URLSearchParams(window.location.search)
-    const code   = params.get('code')
-
     if (!code) {
       void navigate({ to: '/auth/login' })
       return
@@ -48,5 +45,8 @@ function CallbackPage() {
 }
 
 export const Route = createFileRoute('/auth/callback')({
+  validateSearch: (s: Record<string, unknown>) => ({
+    code: typeof s['code'] === 'string' ? s['code'] : undefined,
+  }),
   component: CallbackPage,
 })

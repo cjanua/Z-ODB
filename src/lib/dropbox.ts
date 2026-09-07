@@ -107,21 +107,27 @@ export function isAuthenticated(): boolean {
   return Date.now() < parseInt(expiry) - 60_000
 }
 
-async function refreshAccessToken(): Promise<void> {
-  const refreshToken = localStorage.getItem(KEYS.refresh)
-  if (!refreshToken) throw new Error('No refresh token stored')
+let _refreshPromise: Promise<void> | null = null
 
-  const res = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type:    'refresh_token',
-      refresh_token: refreshToken,
-      client_id:     CLIENT_ID,
-    }),
-  })
-  if (!res.ok) throw new Error(`Token refresh failed: ${await res.text()}`)
-  saveTokens(await res.json() as TokenResponse)
+async function refreshAccessToken(): Promise<void> {
+  // Coalesce concurrent refresh calls — only one in-flight at a time
+  if (_refreshPromise) return _refreshPromise
+  _refreshPromise = (async () => {
+    const refreshToken = localStorage.getItem(KEYS.refresh)
+    if (!refreshToken) throw new Error('No refresh token stored')
+    const res = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type:    'refresh_token',
+        refresh_token: refreshToken,
+        client_id:     CLIENT_ID,
+      }),
+    })
+    if (!res.ok) throw new Error(`Token refresh failed: ${await res.text()}`)
+    saveTokens(await res.json() as TokenResponse)
+  })().finally(() => { _refreshPromise = null })
+  return _refreshPromise
 }
 
 export function clearTokens(): void {

@@ -3,10 +3,17 @@ use tauri::{Emitter, Manager};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch attempt — just focus the existing window
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Second launch attempt — focus the existing window
             if let Some(window) = app.get_webview_window("main") {
                 window.set_focus().ok();
+            }
+            // On Linux, deep links arrive as CLI args to the blocked second instance.
+            // Forward any z:// URL so the existing instance's event listener picks it up.
+            for arg in &args {
+                if arg.starts_with("z://") {
+                    app.emit("z-auth-callback", arg.clone()).ok();
+                }
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
