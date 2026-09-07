@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef } from 'react'
 import { createRootRoute, Outlet, Navigate, useLocation, useNavigate } from '@tanstack/react-router'
 import { Sidebar } from '@/components/layout/sidebar'
 import { SyncStatus } from '@/components/layout/sync-status'
@@ -26,22 +26,7 @@ function RootLayout() {
     return () => unlisten?.()
   }, [navigate])
 
-  // Web + hash routing: Dropbox redirects to /auth/callback?code=ABC as a real URL.
-  // GitHub Pages serves 404.html for that path, so the code is in window.location.search
-  // (not the hash). Detect it synchronously to avoid a flash-redirect to /auth/login.
-  const pendingCode = useMemo(
-    () => isTauri() ? null : new URLSearchParams(window.location.search).get('code'),
-    [], // eslint-disable-line react-hooks/exhaustive-deps
-  )
-
-  useEffect(() => {
-    if (!pendingCode) return
-    window.history.replaceState({}, '', window.location.pathname)
-    void navigate({ to: '/auth/callback', search: { code: pendingCode } })
-  }, [pendingCode, navigate])
-
   if (onAuthRoute) return <Outlet />
-  if (pendingCode) return null           // hold render while bridging to /auth/callback
   if (!isAuthenticated()) return <Navigate to="/auth/login" />
 
   return <AuthenticatedShell />
