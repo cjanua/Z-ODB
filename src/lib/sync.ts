@@ -59,6 +59,23 @@ export async function runSync(
     throw err
   }
 
+  // Pointed at a folder of folders (e.g. the base path rather than a vehicle
+  // folder): there is nothing to sync and never will be. Say so instead of
+  // reporting a cheerful "Synced 0 trips".
+  if (entries.length === 0 && known.size === 0) {
+    const subfolders = listing.entries.filter(e => e['.tag'] === 'folder')
+    if (subfolders.length > 0) {
+      const names = subfolders.slice(0, 3).map(f => f.name).join(', ')
+      onProgress({
+        phase: 'error',
+        total: 0,
+        completed: 0,
+        error: `No CSVLog_*.csv files in ${dropboxFolder} — it holds ${subfolders.length} subfolder(s) (${names}${subfolders.length > 3 ? ', …' : ''}). Select the vehicle folder that contains the logs.`,
+      })
+      return
+    }
+  }
+
   // Filter to only new files not already in the manifest
   const toSync = entries.filter(e => !known.has(stemFromFilename(e.name)))
 

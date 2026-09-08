@@ -31,11 +31,30 @@ export function VinSelector({ onSwitch }: { onSwitch?: () => void }) {
     return <p className="px-3 py-2 text-xs text-muted-foreground">Loading vehicles…</p>
   }
 
-  if (error || !vins?.length) {
+  // Surface the real Dropbox error and the path we tried — a bare "could not
+  // load" hides path/not_found, missing_scope and expired-token equally.
+  if (error) {
     return (
-      <p className="px-3 py-2 text-xs text-muted-foreground">
-        {error ? 'Could not load vehicles' : 'No vehicles found'}
-      </p>
+      <div className="px-3 py-2 space-y-1">
+        <p className="text-xs text-red-400">Could not load vehicles</p>
+        <p className="text-[10px] text-muted-foreground break-all" title={String(error)}>
+          {String(error)}
+        </p>
+        <p className="text-[10px] text-muted-foreground break-all">
+          Folder: <span className="font-mono">{getBaseFolder()}</span>
+        </p>
+      </div>
+    )
+  }
+
+  if (!vins?.length) {
+    return (
+      <div className="px-3 py-2 space-y-1">
+        <p className="text-xs text-muted-foreground">No vehicles found</p>
+        <p className="text-[10px] text-muted-foreground break-all">
+          No subfolders in <span className="font-mono">{getBaseFolder()}</span>
+        </p>
+      </div>
     )
   }
 

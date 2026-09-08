@@ -247,3 +247,49 @@ describe('runSync', () => {
     expect(dbx.getStoredCursor(FOLDER)).toBe('C_FULL')
   })
 })
+
+// ─── Misconfigured folder (base path instead of a vehicle folder) ────────────
+
+describe('runSync folder diagnostics', () => {
+  beforeEach(() => {
+    authed()
+    inserted.length = 0
+    insertShouldFail = false
+  })
+
+  test('a folder of folders reports what is wrong, not "synced 0"', async () => {
+    handler = c => {
+      if (c.url.includes('oauth2/token')) return { status: 200, body: refreshResponse }
+      return {
+        status: 200,
+        body: JSON.stringify({
+          entries: [
+            { '.tag': 'folder', name: 'CsvLogs', path_lower: '/apps/obd fusion/csvlogs' },
+          ],
+          cursor: 'C_DIRS', has_more: false,
+        }),
+      }
+    }
+    let last: { phase: string; error?: string } = { phase: '' }
+
+    await runSync('/Apps/OBD Fusion', p => { last = p })
+
+    expect(last.phase).toBe('error')
+    expect(last.error).toContain('No CSVLog_*.csv files in /Apps/OBD Fusion')
+    expect(last.error).toContain('CsvLogs')
+    expect(dbx.getStoredCursor('/Apps/OBD Fusion')).toBeNull()
+  })
+
+  test('an empty vehicle folder is still a normal, successful sync', async () => {
+    handler = c => {
+      if (c.url.includes('oauth2/token')) return { status: 200, body: refreshResponse }
+      return { status: 200, body: JSON.stringify({ entries: [], cursor: 'C_EMPTY', has_more: false }) }
+    }
+    let last: { phase: string } = { phase: '' }
+
+    await runSync(FOLDER, p => { last = p })
+
+    expect(last.phase).toBe('done')
+    expect(dbx.getStoredCursor(FOLDER)).toBe('C_EMPTY')
+  })
+})
