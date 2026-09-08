@@ -3,9 +3,12 @@
  *   Dropbox list_folder/continue → filter new CSVs → parse → DuckDB insert
  */
 
-import { listNewEntries, downloadFile, type DropboxEntry } from './dropbox'
+import {
+  listNewEntries, commitCursor, downloadFile,
+  type DropboxEntry, type ListResult,
+} from './dropbox'
 import { parseOBDCsv, stemFromFilename } from './csv-parse'
-import { insertTrip, hasTripInManifest } from './duckdb'
+import { insertTrip, getManifestTripIds } from './duckdb'
 
 const CSV_LOG_PATTERN = /^CSVLog_\d{8}_\d{6}\.csv$/i
 
@@ -30,10 +33,22 @@ export async function runSync(
 ): Promise<void> {
   onProgress({ phase: 'listing', total: 0, completed: 0 })
 
+  let known: Set<string>
+  let listing: ListResult
   let entries: DropboxEntry[]
   try {
-    const result = await listNewEntries(dropboxFolder)
-    entries = result.entries.filter(isCsvLog)
+    known   = await getManifestTripIds()
+    listing = await listNewEntries(dropboxFolder)
+    entries = listing.entries.filter(isCsvLog)
+
+    // A delta listing that finds nothing while we hold no trips at all means the
+    // stored cursor ran ahead of what we actually ingested (a failed or
+    // interrupted earlier sync). Re-list the folder in full so those files come
+    // back, instead of reporting "0 new" forever.
+    if (!listing.full && entries.length === 0 && known.size === 0) {
+      listing = await listNewEntries(dropboxFolder, { full: true })
+      entries = listing.entries.filter(isCsvLog)
+    }
   } catch (err) {
     onProgress({
       phase: 'error',
@@ -44,16 +59,19 @@ export async function runSync(
     throw err
   }
 
-  // Filter to only new files not already in manifest
-  const toSync: DropboxEntry[] = []
-  for (const entry of entries) {
-    const tripId = stemFromFilename(entry.name)
-    const already = await hasTripInManifest(tripId)
-    if (!already) toSync.push(entry)
-  }
+  // Filter to only new files not already in the manifest
+  const toSync = entries.filter(e => !known.has(stemFromFilename(e.name)))
 
   const total = toSync.length
-  let completed = 0
+  let completed  = 0
+  let failed     = 0
+  let firstError: string | null = null
+
+  const fail = (what: string, err: unknown) => {
+    failed++
+    firstError ??= `${what}: ${String(err)}`
+    console.error(`[sync] ${what}:`, err)
+  }
 
   for (const entry of toSync) {
     const tripId = stemFromFilename(entry.name)
@@ -63,8 +81,7 @@ export async function runSync(
     try {
       csvText = await downloadFile(entry.path_lower)
     } catch (err) {
-      console.error(`Failed to download ${entry.name}:`, err)
-      completed++
+      fail(`Download failed for ${entry.name}`, err)
       continue
     }
 
@@ -73,11 +90,25 @@ export async function runSync(
     try {
       const parsed = parseOBDCsv(csvText, tripId)
       await insertTrip(tripId, parsed.startTime, parsed.rows, parsed.shutdownVolts, parsed.ts_source)
+      completed++
     } catch (err) {
-      console.error(`Failed to insert ${entry.name}:`, err)
+      fail(`Insert failed for ${entry.name}`, err)
     }
+  }
 
-    completed++
+  // Advance the cursor only when every listed file made it in. Committing it
+  // after a partial sync would hide the failed files permanently, since
+  // list_folder/continue only returns changes made after the cursor.
+  if (failed === 0) commitCursor(dropboxFolder, listing.cursor)
+
+  if (failed > 0) {
+    onProgress({
+      phase: 'error',
+      total,
+      completed,
+      error: `${failed} of ${total} file${total === 1 ? '' : 's'} failed — ${firstError}`,
+    })
+    return
   }
 
   onProgress({ phase: 'done', total, completed })

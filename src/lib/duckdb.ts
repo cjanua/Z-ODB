@@ -6,6 +6,7 @@ import {
   clearCache, saveOBDParquet, loadAllOBDParquets,
   saveMetaParquet, loadMetaParquet,
 } from './cache'
+import { clearAllCursors } from './dropbox'
 
 let _db: AsyncDuckDB | null = null
 let _initPromise: Promise<AsyncDuckDB> | null = null
@@ -213,7 +214,9 @@ async function bootstrapSchema(conn: AsyncDuckDBConnection): Promise<void> {
 const META_TABLES = ['manifest', 'trip_summary', 'pulls', 'accel_runs'] as const
 
 async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): Promise<void> {
-  let restored = 0
+  // `INSERT ... BY NAME` matches columns by name, so a Parquet written before a
+  // schema change still restores (missing columns default) instead of throwing
+  // on column-count mismatch and silently dropping the whole table.
 
   // 1. Per-trip OBD Parquet files
   const trips = await loadAllOBDParquets()
@@ -221,9 +224,8 @@ async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): P
     try {
       const fname = `${trip_id}_restore.parquet`
       await db.registerFileBuffer(fname, parquet)
-      await conn.query(`INSERT INTO obd SELECT * FROM read_parquet('${fname}')`)
+      await conn.query(`INSERT INTO obd BY NAME SELECT * FROM read_parquet('${fname}')`)
       await db.dropFile(fname)
-      restored++
     } catch (err) {
       console.warn(`[cache] skip trip ${trip_id}:`, err)
     }
@@ -236,17 +238,19 @@ async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): P
       if (!buf) continue
       const fname = `${table}_restore.parquet`
       await db.registerFileBuffer(fname, buf)
-      await conn.query(`INSERT INTO ${table} SELECT * FROM read_parquet('${fname}')`)
+      await conn.query(`INSERT INTO ${table} BY NAME SELECT * FROM read_parquet('${fname}')`)
       await db.dropFile(fname)
-      restored++
     } catch (err) {
       console.warn(`[cache] skip ${table}:`, err)
     }
   }
 
-  // If nothing was restored, clear cursor so auto-sync does a full re-download
-  if (restored === 0) {
-    localStorage.removeItem('dbx_list_cursor')
+  // The manifest is what sync diffs against. If it came back empty, any stored
+  // cursor is ahead of the data we hold — drop it so the next sync re-lists the
+  // folder in full rather than reporting "nothing new".
+  const n = await conn.query(`SELECT count(*) AS n FROM manifest`)
+  if (Number(n.toArray()[0]?.['n'] ?? 0) === 0) {
+    clearAllCursors()
   }
 }
 
@@ -756,17 +760,16 @@ export async function resetForRebuild(): Promise<void> {
   await conn.query(`DELETE FROM obd`)
   await conn.close()
   await clearCache()
-  localStorage.removeItem('dbx_list_cursor')
+  clearAllCursors()
 }
 
-export async function hasTripInManifest(tripId: string): Promise<boolean> {
+/** All trip ids already ingested — one query instead of one per candidate file. */
+export async function getManifestTripIds(): Promise<Set<string>> {
   const db   = await getDB()
   const conn = await db.connect()
-  const result = await conn.query(
-    `SELECT 1 FROM manifest WHERE trip_id = '${tripId.replace(/'/g, "''")}' LIMIT 1`,
-  )
+  const result = await conn.query(`SELECT trip_id FROM manifest`)
   await conn.close()
-  return result.toArray().length > 0
+  return new Set(result.toArray().map((r: Record<string, unknown>) => String(r['trip_id'])))
 }
 
 // ─── Trip summary ─────────────────────────────────────────────────────────────

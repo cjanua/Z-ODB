@@ -5,6 +5,7 @@ import {
   resetForRebuild,
   type ManifestRow, type TripSummary, type PullRecord, type AccelRun,
 } from '@/lib/duckdb'
+import { clearAllCursors } from '@/lib/dropbox'
 import type { AsyncDuckDB } from '@duckdb/duckdb-wasm'
 
 // ─── DuckDB ready state ───────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ export function useRebuild() {
   return async () => {
     await resetForRebuild()
     qc.clear()
-    localStorage.removeItem('dbx_list_cursor')
+    clearAllCursors()
   }
 }
 

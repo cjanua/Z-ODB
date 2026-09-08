@@ -85,7 +85,33 @@ const KEYS = {
   access:  'dbx_access_token',
   refresh: 'dbx_refresh_token',
   expiry:  'dbx_token_expiry',
-  cursor:  'dbx_list_cursor',
+}
+
+/** Cursors are per-folder: a cursor from one VIN's folder is meaningless in another. */
+const CURSOR_PREFIX = 'dbx_list_cursor'
+
+function cursorKey(folder: string): string {
+  return `${CURSOR_PREFIX}:${folder.toLowerCase()}`
+}
+
+export function getStoredCursor(folder: string): string | null {
+  return localStorage.getItem(cursorKey(folder))
+}
+
+/**
+ * Persist a listing cursor. Only call this once the listed entries have actually
+ * been ingested — a cursor advanced past un-ingested files hides them forever,
+ * since list_folder/continue only ever returns changes made after it.
+ */
+export function commitCursor(folder: string, cursor: string): void {
+  localStorage.setItem(cursorKey(folder), cursor)
+}
+
+export function clearAllCursors(): void {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i)
+    if (k === CURSOR_PREFIX || k?.startsWith(`${CURSOR_PREFIX}:`)) localStorage.removeItem(k)
+  }
 }
 
 export function saveTokens(t: TokenResponse): void {
@@ -132,6 +158,7 @@ async function refreshAccessToken(): Promise<void> {
 
 export function clearTokens(): void {
   Object.values(KEYS).forEach(k => localStorage.removeItem(k))
+  clearAllCursors()
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
@@ -148,21 +175,27 @@ async function apiFetch(endpoint: string, body: unknown): Promise<Response> {
   })
 }
 
-async function rpc<T>(endpoint: string, body: unknown): Promise<T> {
-  // Proactively refresh if access token is expired but we have a refresh token
+/**
+ * Send a request with a valid access token: refresh proactively when the stored
+ * one has expired, and retry once on 401. `send` is a thunk so the retry reads
+ * the freshly stored token rather than a captured stale one.
+ */
+async function authedFetch(send: () => Promise<Response>): Promise<Response> {
   const expiry = localStorage.getItem(KEYS.expiry)
   if (expiry && Date.now() >= parseInt(expiry) - 60_000) {
     await refreshAccessToken()
   }
 
-  let res = await apiFetch(endpoint, body)
+  const res = await send()
+  if (res.status !== 401) return res
 
-  // Retry once on 401 (token may have been invalidated server-side)
-  if (res.status === 401) {
-    await refreshAccessToken()
-    res = await apiFetch(endpoint, body)
-  }
+  // Token may have been invalidated server-side — refresh and try once more
+  await refreshAccessToken()
+  return send()
+}
 
+async function rpc<T>(endpoint: string, body: unknown): Promise<T> {
+  const res = await authedFetch(() => apiFetch(endpoint, body))
   if (!res.ok) throw new Error(`Dropbox API error ${res.status}: ${await res.text()}`)
   return res.json() as Promise<T>
 }
@@ -182,23 +215,45 @@ interface ListFolderResult {
   has_more: boolean
 }
 
-/** Initial list or resume from stored cursor. */
-export async function listNewEntries(folder: string): Promise<{
+export interface ListResult {
   entries: DropboxEntry[]
   cursor:  string
-}> {
-  const storedCursor = localStorage.getItem(KEYS.cursor)
+  /** true when this was a full folder listing rather than a delta from a stored cursor */
+  full:    boolean
+}
+
+/**
+ * List a folder: a delta from the stored cursor when there is one, otherwise the
+ * full folder. The returned cursor is NOT persisted — the caller commits it with
+ * `commitCursor` once the entries have been ingested.
+ */
+export async function listNewEntries(
+  folder: string,
+  opts: { full?: boolean } = {},
+): Promise<ListResult> {
+  const storedCursor = opts.full ? null : getStoredCursor(folder)
   let result: ListFolderResult
+  let full = true
+
+  const listFull = () => rpc<ListFolderResult>('/files/list_folder', {
+    path: folder,
+    recursive: false,
+  })
 
   if (storedCursor) {
-    result = await rpc<ListFolderResult>('/files/list_folder/continue', {
-      cursor: storedCursor,
-    })
+    try {
+      result = await rpc<ListFolderResult>('/files/list_folder/continue', {
+        cursor: storedCursor,
+      })
+      full = false
+    } catch (err) {
+      // Stale or rejected cursor (folder moved, reset_cursor, expired). Fall back
+      // to a full listing instead of silently reporting "nothing new".
+      console.warn('[dropbox] stored cursor rejected, re-listing folder:', err)
+      result = await listFull()
+    }
   } else {
-    result = await rpc<ListFolderResult>('/files/list_folder', {
-      path: folder,
-      recursive: false,
-    })
+    result = await listFull()
   }
 
   // Drain pagination
@@ -211,8 +266,7 @@ export async function listNewEntries(folder: string): Promise<{
     result.has_more = next.has_more
   }
 
-  localStorage.setItem(KEYS.cursor, result.cursor)
-  return { entries: result.entries, cursor: result.cursor }
+  return { entries: result.entries, cursor: result.cursor, full }
 }
 
 // ─── Folder listing (for VIN discovery) ─────────────────────────────────────
@@ -246,14 +300,13 @@ export async function getSpaceUsage(): Promise<SpaceUsage> {
 
 /** Download a single file as text. */
 export async function downloadFile(path: string): Promise<string> {
-  const token = getAccessToken()
-  const res = await fetch(`${CONTENT_URL}/files/download`, {
+  const res = await authedFetch(() => fetch(`${CONTENT_URL}/files/download`, {
     method: 'POST',
     headers: {
-      Authorization:    `Bearer ${token}`,
+      Authorization:    `Bearer ${getAccessToken()}`,
       'Dropbox-API-Arg': JSON.stringify({ path }),
     },
-  })
+  }))
   if (!res.ok) throw new Error(`Download failed for ${path}: ${await res.text()}`)
   return res.text()
 }

@@ -1,3 +1,5 @@
+import { clearAllCursors } from './dropbox'
+
 const BASE_FOLDER = import.meta.env['VITE_DROPBOX_FOLDER'] as string || '/Apps/OBD Fusion/CsvLogs'
 const STORAGE_KEY = 'z_selected_vin'
 
@@ -9,7 +11,7 @@ export function setSelectedVin(vin: string): void {
   const prev = localStorage.getItem(STORAGE_KEY)
   localStorage.setItem(STORAGE_KEY, vin)
   if (prev !== vin) {
-    localStorage.removeItem('dbx_list_cursor')
+    clearAllCursors()
   }
 }
 
