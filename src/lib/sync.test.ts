@@ -293,3 +293,77 @@ describe('runSync folder diagnostics', () => {
     expect(dbx.getStoredCursor(FOLDER)).toBe('C_EMPTY')
   })
 })
+
+// ─── App-folder scoping ──────────────────────────────────────────────────────
+
+const NOT_FOUND = JSON.stringify({
+  error_summary: 'path/not_found/...',
+  error: { '.tag': 'path', path: { '.tag': 'not_found' } },
+})
+
+function foldersBody(...names: string[]) {
+  return JSON.stringify({
+    entries: names.map(n => ({ '.tag': 'folder', name: n, path_lower: `/${n.toLowerCase()}` })),
+    cursor: 'X', has_more: false,
+  })
+}
+
+describe('appFolderRelativePath', () => {
+  test('maps a full Dropbox path to its app-relative form', () => {
+    expect(dbx.appFolderRelativePath('/Apps/OBD Fusion/CsvLogs')).toBe('/CsvLogs')
+  })
+  test('the app folder itself maps to API root', () => {
+    expect(dbx.appFolderRelativePath('/Apps/OBD Fusion')).toBe('')
+  })
+  test('leaves a non-/Apps path alone', () => {
+    expect(dbx.appFolderRelativePath('/OBD Fusion/CsvLogs')).toBeNull()
+  })
+})
+
+describe('listSubfolders scoping', () => {
+  const FULL = '/Apps/OBD Fusion/CsvLogs'
+
+  beforeEach(() => { authed() })
+
+  test('full-Dropbox app: uses the configured path as-is', async () => {
+    handler = () => ({ status: 200, body: foldersBody('VIN_A', 'VIN_B') })
+
+    expect(await dbx.listSubfolders(FULL)).toEqual(['VIN_A', 'VIN_B'])
+    expect(dbx.getResolvedBase()).toBe(FULL)
+  })
+
+  test('app-folder app: falls back to the app-relative path and remembers it', async () => {
+    handler = c => c.body?.includes('/Apps/OBD Fusion')
+      ? { status: 409, body: NOT_FOUND }
+      : { status: 200, body: foldersBody('VIN_A') }
+
+    expect(await dbx.listSubfolders(FULL)).toEqual(['VIN_A'])
+    expect(dbx.getResolvedBase()).toBe('/CsvLogs')
+
+    // and the sync path is built from the resolved base
+    const vin = await import('./vin')
+    vin.setSelectedVin('VIN_A')
+    expect(vin.getDropboxFolder()).toBe('/CsvLogs/VIN_A')
+  })
+
+  test('an auth error is not treated as a scoping problem', async () => {
+    let listAttempts = 0
+    handler = c => {
+      if (c.url.includes('oauth2/token')) return { status: 200, body: refreshResponse }
+      listAttempts++
+      return { status: 403, body: 'missing_scope: files.metadata.read' }
+    }
+
+    await expect(dbx.listSubfolders(FULL)).rejects.toThrow('missing_scope')
+    // No app-relative retry: the path was fine, the permissions were not.
+    expect(listAttempts).toBe(1)
+  })
+
+  test('when both paths fail, the app-relative error surfaces', async () => {
+    handler = c => c.body?.includes('/Apps/OBD Fusion')
+      ? { status: 409, body: NOT_FOUND }
+      : { status: 409, body: JSON.stringify({ error_summary: 'path/malformed_path/...' }) }
+
+    await expect(dbx.listSubfolders(FULL)).rejects.toThrow('malformed_path')
+  })
+})

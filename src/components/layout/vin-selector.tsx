@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { listSubfolders } from '@/lib/dropbox'
-import { getSelectedVin, setSelectedVin, getBaseFolder } from '@/lib/vin'
+import { getSelectedVin, setSelectedVin, getBaseFolder, getConfiguredBaseFolder } from '@/lib/vin'
+import { appFolderRelativePath } from '@/lib/dropbox'
 import { useState } from 'react'
 
 export function VinSelector({ onSwitch }: { onSwitch?: () => void }) {
@@ -41,7 +42,12 @@ export function VinSelector({ onSwitch }: { onSwitch?: () => void }) {
           {String(error)}
         </p>
         <p className="text-[10px] text-muted-foreground break-all">
-          Folder: <span className="font-mono">{getBaseFolder()}</span>
+          Tried: <span className="font-mono">{getConfiguredBaseFolder()}</span>
+          {appFolderRelativePath(getConfiguredBaseFolder()) !== null && (
+            <> and <span className="font-mono">
+              {appFolderRelativePath(getConfiguredBaseFolder()) || '/'}
+            </span></>
+          )}
         </p>
       </div>
     )

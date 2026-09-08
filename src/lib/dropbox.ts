@@ -90,6 +90,9 @@ const KEYS = {
 /** Cursors are per-folder: a cursor from one VIN's folder is meaningless in another. */
 const CURSOR_PREFIX = 'dbx_list_cursor'
 
+/** The base folder that actually resolved over the API (see listSubfolders). */
+const RESOLVED_BASE_KEY = 'dbx_resolved_base'
+
 function cursorKey(folder: string): string {
   return `${CURSOR_PREFIX}:${folder.toLowerCase()}`
 }
@@ -159,6 +162,8 @@ async function refreshAccessToken(): Promise<void> {
 export function clearTokens(): void {
   Object.values(KEYS).forEach(k => localStorage.removeItem(k))
   clearAllCursors()
+  // Scoping is a property of the connected app, so re-detect on the next login.
+  clearResolvedBase()
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
@@ -269,9 +274,40 @@ export async function listNewEntries(
   return { entries: result.entries, cursor: result.cursor, full }
 }
 
+// ─── App-folder scoping ─────────────────────────────────────────────────────
+
+/**
+ * A Dropbox app with "App folder" access addresses its own folder as the API
+ * root: what the web UI shows as `/Apps/<App Name>/x` is just `/x` over the
+ * API, and the full path 404s. Returns that app-relative variant for a full
+ * Dropbox path, or null when the path isn't under /Apps. Root is `''`, which
+ * is how the API spells it.
+ */
+export function appFolderRelativePath(path: string): string | null {
+  const m = path.match(/^\/Apps\/[^/]+(\/.*)?$/i)
+  if (!m) return null
+  return (m[1] ?? '').replace(/\/$/, '')
+}
+
+function isPathNotFound(err: unknown): boolean {
+  return String(err).includes('path/not_found')
+}
+
+/**
+ * The base folder actually reachable over the API, once app-folder scoping has
+ * been detected. Null until a listing has resolved it.
+ */
+export function getResolvedBase(): string | null {
+  return localStorage.getItem(RESOLVED_BASE_KEY)
+}
+
+export function clearResolvedBase(): void {
+  localStorage.removeItem(RESOLVED_BASE_KEY)
+}
+
 // ─── Folder listing (for VIN discovery) ─────────────────────────────────────
 
-export async function listSubfolders(path: string): Promise<string[]> {
+async function listFolderNames(path: string): Promise<string[]> {
   const result = await rpc<{ entries: DropboxEntry[] }>('/files/list_folder', {
     path,
     recursive: false,
@@ -279,6 +315,29 @@ export async function listSubfolders(path: string): Promise<string[]> {
   return result.entries
     .filter(e => e['.tag'] === 'folder')
     .map(e => e.name)
+}
+
+/**
+ * List subfolders, transparently handling an app-folder-scoped app: if the
+ * configured full path isn't found, retry the app-relative variant and, when
+ * that works, remember it as the effective base for everything else.
+ */
+export async function listSubfolders(path: string): Promise<string[]> {
+  try {
+    const names = await listFolderNames(path)
+    localStorage.setItem(RESOLVED_BASE_KEY, path)
+    return names
+  } catch (err) {
+    const alt = appFolderRelativePath(path)
+    if (alt === null || !isPathNotFound(err)) throw err
+
+    // Let this one throw on its own terms — if the app-relative path fails too,
+    // that error is the more useful one to show.
+    const names = await listFolderNames(alt)
+    console.warn(`[dropbox] "${path}" not found — app-folder scoped, using "${alt || '/'}"`)
+    localStorage.setItem(RESOLVED_BASE_KEY, alt)
+    return names
+  }
 }
 
 // ─── Space usage ────────────────────────────────────────────────────────────
