@@ -1,6 +1,18 @@
 import { clearAllCursors, getResolvedBase } from './dropbox'
 
-const CONFIGURED_BASE = import.meta.env['VITE_DROPBOX_FOLDER'] as string || '/Apps/OBD Fusion/CsvLogs'
+/**
+ * Dropbox rejects a path with a trailing slash (path/malformed_path), and the
+ * configured value routinely has one. Root is `''`, which is how the API
+ * spells it.
+ */
+function normalizePath(p: string): string {
+  const trimmed = p.trim().replace(/\/+$/, '')
+  return trimmed === '/' ? '' : trimmed
+}
+
+const CONFIGURED_BASE = normalizePath(
+  (import.meta.env['VITE_DROPBOX_FOLDER'] as string) || '/Apps/OBD Fusion/CsvLogs',
+)
 const STORAGE_KEY = 'z_selected_vin'
 
 export function getSelectedVin(): string | null {
@@ -25,11 +37,12 @@ export function getConfiguredBaseFolder(): string {
  * listing found the app to be app-folder scoped and resolved a different path.
  */
 export function getBaseFolder(): string {
-  return getResolvedBase() ?? CONFIGURED_BASE
+  const resolved = getResolvedBase()
+  return resolved === null ? CONFIGURED_BASE : normalizePath(resolved)
 }
 
 export function getDropboxFolder(): string {
-  const base = getBaseFolder().replace(/\/$/, '')
+  const base = getBaseFolder()
   const vin  = getSelectedVin()
   if (!vin) return base
   return `${base}/${vin}`

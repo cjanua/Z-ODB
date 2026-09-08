@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { listSubfolders } from '@/lib/dropbox'
 import { getSelectedVin, setSelectedVin, getBaseFolder, getConfiguredBaseFolder } from '@/lib/vin'
-import { appFolderRelativePath } from '@/lib/dropbox'
+import { appFolderRelativePath, RECONNECT_MSG, startOAuthFlow } from '@/lib/dropbox'
 import { useState } from 'react'
 
 export function VinSelector({ onSwitch }: { onSwitch?: () => void }) {
@@ -35,6 +35,22 @@ export function VinSelector({ onSwitch }: { onSwitch?: () => void }) {
   // Surface the real Dropbox error and the path we tried — a bare "could not
   // load" hides path/not_found, missing_scope and expired-token equally.
   if (error) {
+    // An expired/revoked credential is not a folder problem — it needs a new
+    // OAuth round trip, so offer that instead of a path to stare at.
+    if (String(error).includes(RECONNECT_MSG)) {
+      return (
+        <div className="px-3 py-2 space-y-2">
+          <p className="text-xs text-red-400">{RECONNECT_MSG}</p>
+          <button
+            onClick={() => void startOAuthFlow()}
+            className="w-full rounded-md border px-2 py-1.5 text-xs hover:bg-accent transition-colors"
+          >
+            Reconnect Dropbox
+          </button>
+        </div>
+      )
+    }
+
     return (
       <div className="px-3 py-2 space-y-1">
         <p className="text-xs text-red-400">Could not load vehicles</p>

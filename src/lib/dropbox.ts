@@ -55,7 +55,8 @@ export async function startOAuthFlow(): Promise<void> {
 
 export interface TokenResponse {
   access_token:  string
-  refresh_token: string
+  /** Only present on the initial code exchange — the refresh grant omits it. */
+  refresh_token?: string
   expires_in:    number
 }
 
@@ -119,8 +120,21 @@ export function clearAllCursors(): void {
 
 export function saveTokens(t: TokenResponse): void {
   localStorage.setItem(KEYS.access,  t.access_token)
-  localStorage.setItem(KEYS.refresh, t.refresh_token)
+  // The refresh grant returns no refresh_token, so writing it unconditionally
+  // stores the string "undefined" and destroys the credential on first refresh.
+  if (t.refresh_token) localStorage.setItem(KEYS.refresh, t.refresh_token)
   localStorage.setItem(KEYS.expiry,  String(Date.now() + t.expires_in * 1000))
+}
+
+/**
+ * The stored refresh token, or null when there isn't a usable one. Earlier
+ * builds wrote the literal string "undefined" here (see saveTokens), so those
+ * values are treated as absent rather than sent to Dropbox as a credential.
+ */
+export function getRefreshToken(): string | null {
+  const t = localStorage.getItem(KEYS.refresh)
+  if (!t || t === 'undefined' || t === 'null') return null
+  return t
 }
 
 export function getAccessToken(): string | null {
@@ -129,12 +143,14 @@ export function getAccessToken(): string | null {
 
 export function isAuthenticated(): boolean {
   // Has refresh token → can always get a new access token
-  if (localStorage.getItem(KEYS.refresh)) return true
+  if (getRefreshToken()) return true
   const token  = localStorage.getItem(KEYS.access)
   const expiry = localStorage.getItem(KEYS.expiry)
   if (!token || !expiry) return false
   return Date.now() < parseInt(expiry) - 60_000
 }
+
+export const RECONNECT_MSG = 'Dropbox session expired — reconnect to continue'
 
 let _refreshPromise: Promise<void> | null = null
 
@@ -142,8 +158,8 @@ async function refreshAccessToken(): Promise<void> {
   // Coalesce concurrent refresh calls — only one in-flight at a time
   if (_refreshPromise) return _refreshPromise
   _refreshPromise = (async () => {
-    const refreshToken = localStorage.getItem(KEYS.refresh)
-    if (!refreshToken) throw new Error('No refresh token stored')
+    const refreshToken = getRefreshToken()
+    if (!refreshToken) throw new Error(RECONNECT_MSG)
     const res = await fetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -153,7 +169,16 @@ async function refreshAccessToken(): Promise<void> {
         client_id:     CLIENT_ID,
       }),
     })
-    if (!res.ok) throw new Error(`Token refresh failed: ${await res.text()}`)
+    if (!res.ok) {
+      const body = await res.text()
+      // invalid_grant = revoked, expired or malformed. The stored credential is
+      // unusable, so drop it instead of retrying it forever.
+      if (body.includes('invalid_grant')) {
+        clearTokens()
+        throw new Error(RECONNECT_MSG)
+      }
+      throw new Error(`Token refresh failed: ${body}`)
+    }
     saveTokens(await res.json() as TokenResponse)
   })().finally(() => { _refreshPromise = null })
   return _refreshPromise

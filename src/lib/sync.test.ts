@@ -367,3 +367,75 @@ describe('listSubfolders scoping', () => {
     await expect(dbx.listSubfolders(FULL)).rejects.toThrow('malformed_path')
   })
 })
+
+// ─── Token storage ───────────────────────────────────────────────────────────
+
+describe('saveTokens', () => {
+  beforeEach(() => { authed() })
+
+  test('a refresh response without refresh_token keeps the stored one', () => {
+    // Dropbox's refresh grant returns access_token/expires_in only.
+    dbx.saveTokens({ access_token: 'A2', expires_in: 14400 })
+
+    expect(dbx.getRefreshToken()).toBe('REFRESH')
+    expect(dbx.getAccessToken()).toBe('A2')
+  })
+
+  test('the initial code exchange does store the refresh token', () => {
+    store.clear()
+    dbx.saveTokens({ access_token: 'A1', refresh_token: 'R1', expires_in: 14400 })
+    expect(dbx.getRefreshToken()).toBe('R1')
+  })
+
+  test('a previously poisoned "undefined" token reads as absent', () => {
+    store.clear()
+    store.setItem('dbx_refresh_token', 'undefined')
+
+    expect(dbx.getRefreshToken()).toBeNull()
+    expect(dbx.isAuthenticated()).toBe(false)
+  })
+})
+
+describe('refresh failure handling', () => {
+  test('a full refresh cycle does not destroy the refresh token', async () => {
+    authed({ expired: true })
+    handler = c => c.url.includes('oauth2/token')
+      // Real Dropbox refresh response shape — no refresh_token field.
+      ? { status: 200, body: JSON.stringify({ access_token: 'A2', token_type: 'bearer', expires_in: 14400 }) }
+      : { status: 200, body: 'csv' }
+
+    await dbx.downloadFile('/f/x.csv')
+    expect(dbx.getRefreshToken()).toBe('REFRESH')
+
+    // A second cycle still works — the regression only bit on the 2nd refresh.
+    store.setItem('dbx_token_expiry', String(Date.now() - 60_000))
+    await dbx.downloadFile('/f/x.csv')
+    expect(dbx.getRefreshToken()).toBe('REFRESH')
+  })
+
+  test('invalid_grant clears the dead credential and asks for a reconnect', async () => {
+    authed({ expired: true })
+    handler = () => ({
+      status: 400,
+      body: '{"error": "invalid_grant", "error_description": "refresh token is malformed"}',
+    })
+
+    await expect(dbx.downloadFile('/f/x.csv')).rejects.toThrow(dbx.RECONNECT_MSG)
+    expect(dbx.getRefreshToken()).toBeNull()
+    expect(dbx.isAuthenticated()).toBe(false)
+  })
+})
+
+describe('folder path normalization', () => {
+  test('a trailing slash is stripped before it reaches Dropbox', async () => {
+    const vin = await import('./vin')
+    store.removeItem('dbx_resolved_base')
+    store.removeItem('z_selected_vin')
+    // Simulates VITE_DROPBOX_FOLDER="/Apps/OBD Fusion/CsvLogs/"
+    store.setItem('dbx_resolved_base', '/Apps/OBD Fusion/CsvLogs/')
+    expect(vin.getBaseFolder()).toBe('/Apps/OBD Fusion/CsvLogs')
+
+    vin.setSelectedVin('VIN_A')
+    expect(vin.getDropboxFolder()).toBe('/Apps/OBD Fusion/CsvLogs/VIN_A')
+  })
+})
