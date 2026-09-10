@@ -144,12 +144,19 @@ describe('listing cursor', () => {
 const inserted: string[] = []
 let insertShouldFail = false
 
+let derivedFlushes = 0
+
 mock.module('./duckdb', () => ({
   getManifestTripIds: async () => new Set(inserted),
   insertTrip: async (tripId: string) => {
     if (insertShouldFail) throw new Error('simulated insert failure')
-    inserted.push(tripId)
+    // Upsert: the real insertTrip deletes the trip's rows first, so a repeat
+    // ingest replaces rather than appends.
+    const at = inserted.indexOf(tripId)
+    if (at === -1) inserted.push(tripId)
+    else inserted[at] = tripId
   },
+  flushDerivedCache: async () => { derivedFlushes++ },
 }))
 
 const { runSync } = await import('./sync')
@@ -437,5 +444,83 @@ describe('folder path normalization', () => {
 
     vin.setSelectedVin('VIN_A')
     expect(vin.getDropboxFolder()).toBe('/Apps/OBD Fusion/CsvLogs/VIN_A')
+  })
+})
+
+// ─── Re-ingest ───────────────────────────────────────────────────────────────
+
+describe('re-ingest', () => {
+  beforeEach(() => {
+    authed()
+    inserted.length = 0
+    insertShouldFail = false
+    derivedFlushes = 0
+  })
+
+  test('a normal sync skips trips already held', async () => {
+    inserted.push('CSVLog_20260905_173049')
+    handler = listOneFile('C_OK')
+
+    await runSync(FOLDER)
+
+    expect(inserted).toEqual(['CSVLog_20260905_173049'])
+    expect(derivedFlushes).toBe(0)  // nothing ingested, nothing to flush
+  })
+
+  test('reingest re-ingests a trip already held, without duplicating it', async () => {
+    inserted.push('CSVLog_20260905_173049')
+    handler = listOneFile('C_OK')
+
+    await runSync(FOLDER, () => {}, { reingest: true })
+
+    expect(inserted).toEqual(['CSVLog_20260905_173049'])
+    expect(derivedFlushes).toBe(1)
+  })
+
+  test('reingest ignores the stored cursor and lists in full', async () => {
+    dbx.commitCursor(FOLDER, 'AHEAD')
+    let usedCursor = false
+    handler = c => {
+      if (c.url.includes('oauth2/token')) return { status: 200, body: refreshResponse }
+      if (c.url.includes('files/download')) return { status: 200, body: CSV }
+      if (c.body?.includes('AHEAD')) {
+        usedCursor = true
+        return { status: 200, body: JSON.stringify({ entries: [], cursor: 'AHEAD', has_more: false }) }
+      }
+      return {
+        status: 200,
+        body: JSON.stringify({
+          entries: [{ '.tag': 'file', name: 'CSVLog_20260905_173049.csv', path_lower: '/a.csv' }],
+          cursor: 'C_FULL', has_more: false,
+        }),
+      }
+    }
+
+    await runSync(FOLDER, () => {}, { reingest: true })
+
+    expect(usedCursor).toBe(false)
+    expect(inserted).toEqual(['CSVLog_20260905_173049'])
+  })
+
+  test('derived tables are flushed once per sync, not once per trip', async () => {
+    handler = c => {
+      if (c.url.includes('oauth2/token')) return { status: 200, body: refreshResponse }
+      if (c.url.includes('files/download')) return { status: 200, body: CSV }
+      return {
+        status: 200,
+        body: JSON.stringify({
+          entries: [
+            { '.tag': 'file', name: 'CSVLog_20260905_173049.csv', path_lower: '/a.csv' },
+            { '.tag': 'file', name: 'CSVLog_20260906_081500.csv', path_lower: '/b.csv' },
+          ],
+          cursor: 'C_TWO', has_more: false,
+        }),
+      }
+    }
+
+    await runSync(FOLDER)
+
+    expect(inserted).toHaveLength(2)
+    expect(derivedFlushes).toBe(1)
   })
 })

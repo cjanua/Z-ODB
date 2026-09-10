@@ -67,7 +67,7 @@ export function SyncStatus({ progress, syncing, onSync, onRebuild, className }: 
           size="icon"
           disabled={syncing}
           onClick={onRebuild}
-          title="Wipe all data and re-ingest from Dropbox"
+          title="Re-ingest all trips from Dropbox (nothing is deleted)"
           className="shrink-0 text-muted-foreground"
         >
           <RotateCcw className="h-4 w-4" />

@@ -3,10 +3,11 @@ import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm'
 import type { OBDRawRow } from './csv-parse'
 import { tripTsToEpochMs, epochMsToDateOrFallback } from './trip-date'
 import {
-  clearCache, saveOBDParquet, loadAllOBDParquets,
+  saveOBDParquet, loadAllOBDParquets,
   saveMetaParquet, loadMetaParquet,
 } from './cache'
 import { clearAllCursors } from './dropbox'
+import { RECONCILE_MANIFEST_SQL } from './persistence-sql'
 
 let _db: AsyncDuckDB | null = null
 let _initPromise: Promise<AsyncDuckDB> | null = null
@@ -213,6 +214,7 @@ async function bootstrapSchema(conn: AsyncDuckDBConnection): Promise<void> {
 
 const META_TABLES = ['manifest', 'trip_summary', 'pulls', 'accel_runs'] as const
 
+
 async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): Promise<void> {
   // `INSERT ... BY NAME` matches columns by name, so a Parquet written before a
   // schema change still restores (missing columns default) instead of throwing
@@ -245,37 +247,68 @@ async function restoreFromCache(conn: AsyncDuckDBConnection, db: AsyncDuckDB): P
     }
   }
 
-  // The manifest is what sync diffs against. If it came back empty, any stored
-  // cursor is ahead of the data we hold — drop it so the next sync re-lists the
-  // folder in full rather than reporting "nothing new".
+  // 3. Reconcile: the manifest is what every trip listing reads, but it is
+  // cached as its own Parquet and can be lost or fail to restore while the OBD
+  // data survives. Rebuild any missing rows from the data actually present, so
+  // a trip whose rows are loaded is never invisible.
+  await conn.query(RECONCILE_MANIFEST_SQL)
+
+  // Only now is an empty manifest proof that we hold nothing. Any stored cursor
+  // is then ahead of our data — drop it so the next sync re-lists in full.
   const n = await conn.query(`SELECT count(*) AS n FROM manifest`)
   if (Number(n.toArray()[0]?.['n'] ?? 0) === 0) {
     clearAllCursors()
   }
 }
 
-async function saveToCache(tripId: string, conn: AsyncDuckDBConnection, db: AsyncDuckDB): Promise<void> {
+async function saveTableParquet(
+  table: string, conn: AsyncDuckDBConnection, db: AsyncDuckDB,
+): Promise<void> {
+  const fname = `${table}_save.parquet`
+  await conn.query(`COPY (SELECT * FROM ${table}) TO '${fname}' (FORMAT PARQUET)`)
+  const buf = await db.copyFileToBuffer(fname)
+  await db.dropFile(fname)
+  await saveMetaParquet(table, buf)
+}
+
+/**
+ * Persist one trip: its OBD rows, plus the manifest that indexes them. Both go
+ * together so a trip is never on disk without an index entry — and the manifest
+ * is small, so writing it per trip is cheap.
+ */
+async function saveTripToCache(
+  tripId: string, conn: AsyncDuckDBConnection, db: AsyncDuckDB,
+): Promise<void> {
   try {
     const tid = tripId.replace(/'/g, "''")
-
-    // Per-trip OBD data
     await conn.query(`COPY (SELECT * FROM obd WHERE trip_id = '${tid}') TO 'obd_export.parquet' (FORMAT PARQUET)`)
     const parquet = await db.copyFileToBuffer('obd_export.parquet')
     await db.dropFile('obd_export.parquet')
     await saveOBDParquet(tripId, parquet)
+    await saveTableParquet('manifest', conn, db)
+  } catch (err) {
+    console.warn(`[cache] save failed for ${tripId}:`, err)
+  }
+}
 
-    // Metadata tables — Parquet preserves types exactly, no conversion needed
+/**
+ * Persist the derived tables. These are whole-table writes, so they run once at
+ * the end of a sync rather than per trip. Losing them costs only the derived
+ * layer — restore reconstructs the manifest from the OBD rows regardless.
+ */
+export async function flushDerivedCache(): Promise<void> {
+  const db   = await getDB()
+  const conn = await db.connect()
+  try {
     for (const table of META_TABLES) {
       const count = await conn.query(`SELECT count(*) as n FROM ${table}`)
       if (Number(count.toArray()[0]?.['n'] ?? 0) === 0) continue
-      const fname = `${table}_save.parquet`
-      await conn.query(`COPY (SELECT * FROM ${table}) TO '${fname}' (FORMAT PARQUET)`)
-      const buf = await db.copyFileToBuffer(fname)
-      await db.dropFile(fname)
-      await saveMetaParquet(table, buf)
+      await saveTableParquet(table, conn, db)
     }
   } catch (err) {
-    console.warn('[cache] save failed:', err)
+    console.warn('[cache] derived-table save failed:', err)
+  } finally {
+    await conn.close()
   }
 }
 
@@ -297,8 +330,22 @@ export async function insertTrip(
   const tid = tripId.replace(/'/g, "''")
   const sdv = shutdownVolts !== null ? String(shutdownVolts) : 'NULL'
 
+  try {
   // Register raw rows as JSON
   await db.registerFileText(`${tripId}.json`, JSON.stringify(rows))
+
+  // One transaction: a trip is either fully ingested or not at all, never left
+  // half-written across obd/pulls/accel_runs for a later read to trip over.
+  await conn.query(`BEGIN TRANSACTION`)
+
+  try {
+
+  // Upsert: obd, pulls and accel_runs hold many rows per trip and have no
+  // primary key, so re-ingesting one has to clear its rows first or they
+  // accumulate. trip_summary and manifest are keyed and use INSERT OR REPLACE.
+  await conn.query(`DELETE FROM obd        WHERE trip_id = '${tid}'`)
+  await conn.query(`DELETE FROM pulls      WHERE trip_id = '${tid}'`)
+  await conn.query(`DELETE FROM accel_runs WHERE trip_id = '${tid}'`)
 
   // INSERT with full derived layer computed via SQL window functions
   await conn.query(`
@@ -717,10 +764,21 @@ export async function insertTrip(
       COALESCE((SELECT is_fragment FROM trip_summary WHERE trip_id = '${tid}'), false)
   `)
 
-  // Persist to IndexedDB cache
-  await saveToCache(tripId, conn, db)
+    await conn.query(`COMMIT`)
+  } catch (err) {
+    await conn.query(`ROLLBACK`)
+    throw err
+  } finally {
+    await db.dropFile(`${tripId}.json`)
+  }
 
-  await conn.close()
+  // Persist to IndexedDB cache (outside the transaction — it reads committed rows)
+  await saveTripToCache(tripId, conn, db)
+  } finally {
+    // Always release the connection, including when the ingest threw — sync
+    // continues past a failed trip, so a leak here compounds.
+    await conn.close()
+  }
 }
 
 // ─── Manifest ─────────────────────────────────────────────────────────────────
@@ -749,17 +807,13 @@ export async function getManifest(): Promise<ManifestRow[]> {
   }))
 }
 
-/** Drop all computed data and cursor so the next sync is a full re-ingest. */
-export async function resetForRebuild(): Promise<void> {
-  const db   = await getDB()
-  const conn = await db.connect()
-  await conn.query(`DELETE FROM pulls`)
-  await conn.query(`DELETE FROM accel_runs`)
-  await conn.query(`DELETE FROM trip_summary`)
-  await conn.query(`DELETE FROM manifest`)
-  await conn.query(`DELETE FROM obd`)
-  await conn.close()
-  await clearCache()
+/**
+ * Re-ingest every trip from Dropbox on the next sync. Deliberately destroys
+ * nothing: the cursor is cleared so the folder is re-listed in full, and each
+ * trip is upserted over the copy already loaded. Data stays queryable
+ * throughout, so there is no window where the app looks empty.
+ */
+export function prepareReingest(): void {
   clearAllCursors()
 }
 

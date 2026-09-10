@@ -8,7 +8,7 @@ import {
   type DropboxEntry, type ListResult,
 } from './dropbox'
 import { parseOBDCsv, stemFromFilename } from './csv-parse'
-import { insertTrip, getManifestTripIds } from './duckdb'
+import { insertTrip, getManifestTripIds, flushDerivedCache } from './duckdb'
 
 const CSV_LOG_PATTERN = /^CSVLog_\d{8}_\d{6}\.csv$/i
 
@@ -26,10 +26,16 @@ function isCsvLog(entry: DropboxEntry): boolean {
   return entry['.tag'] === 'file' && CSV_LOG_PATTERN.test(entry.name)
 }
 
+export interface SyncOptions {
+  /** Re-list and re-ingest every file, upserting over what is already loaded. */
+  reingest?: boolean
+}
+
 /** Run a full incremental sync from Dropbox into DuckDB. */
 export async function runSync(
   dropboxFolder: string,
   onProgress: SyncProgressCallback = () => {},
+  opts: SyncOptions = {},
 ): Promise<void> {
   onProgress({ phase: 'listing', total: 0, completed: 0 })
 
@@ -38,7 +44,7 @@ export async function runSync(
   let entries: DropboxEntry[]
   try {
     known   = await getManifestTripIds()
-    listing = await listNewEntries(dropboxFolder)
+    listing = await listNewEntries(dropboxFolder, { full: opts.reingest })
     entries = listing.entries.filter(isCsvLog)
 
     // A delta listing that finds nothing while we hold no trips at all means the
@@ -76,8 +82,11 @@ export async function runSync(
     }
   }
 
-  // Filter to only new files not already in the manifest
-  const toSync = entries.filter(e => !known.has(stemFromFilename(e.name)))
+  // Filter to only new files not already in the manifest. A re-ingest takes
+  // them all — insertTrip upserts, so the loaded copy is replaced in place.
+  const toSync = opts.reingest
+    ? entries
+    : entries.filter(e => !known.has(stemFromFilename(e.name)))
 
   const total = toSync.length
   let completed  = 0
@@ -112,6 +121,10 @@ export async function runSync(
       fail(`Insert failed for ${entry.name}`, err)
     }
   }
+
+  // Derived tables are whole-table writes, so they are persisted once here
+  // rather than on every trip.
+  if (completed > 0) await flushDerivedCache()
 
   // Advance the cursor only when every listed file made it in. Committing it
   // after a partial sync would hide the failed files permanently, since

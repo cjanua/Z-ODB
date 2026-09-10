@@ -58,9 +58,13 @@ function PerformancePage() {
         </CardHeader>
         <CardContent>
           {pulls.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No pulls detected yet. <abbr title="Wide Open Throttle">WOT</abbr> (&gt;70% pedal, &gt;3 psi boost, ≥2 s) required.
-            </p>
+            loadingPulls ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No pulls detected yet. <abbr title="Wide Open Throttle">WOT</abbr> (&gt;70% pedal, &gt;3 psi boost, ≥2 s) required.
+              </p>
+            )
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

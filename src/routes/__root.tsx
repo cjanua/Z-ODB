@@ -4,7 +4,7 @@ import { Menu } from 'lucide-react'
 import { Sidebar } from '@/components/layout/sidebar'
 import { SyncStatus } from '@/components/layout/sync-status'
 import { isAuthenticated } from '@/lib/dropbox'
-import { useDuckDB, useInvalidateDuckDB, useRebuild } from '@/hooks/use-duckdb'
+import { useDuckDB, useInvalidateDuckDB, useReingest } from '@/hooks/use-duckdb'
 import { useSync } from '@/hooks/use-sync'
 import { isTauri } from '@/lib/platform'
 import { getSelectedVin } from '@/lib/vin'
@@ -38,7 +38,7 @@ function AuthenticatedShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { ready, error: dbError } = useDuckDB()
   const invalidate  = useInvalidateDuckDB()
-  const rebuild     = useRebuild()
+  const reingest    = useReingest()
   const { progress, syncing, sync } = useSync(invalidate)
 
   const didAutoSync = useRef(false)
@@ -60,9 +60,9 @@ function AuthenticatedShell() {
     )
   }
 
-  async function handleRebuild() {
-    await rebuild()
-    void sync()
+  function handleReingest() {
+    reingest()
+    void sync({ reingest: true })
   }
 
   return (
@@ -83,7 +83,7 @@ function AuthenticatedShell() {
             progress={progress}
             syncing={syncing}
             onSync={() => void sync()}
-            onRebuild={() => void handleRebuild()}
+            onRebuild={handleReingest}
           />
         </header>
         <main className="flex-1 overflow-auto p-4 md:p-6">

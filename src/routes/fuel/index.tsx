@@ -49,7 +49,7 @@ function FuelPage() {
         </CardHeader>
         <CardContent>
           {summaries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No data — sync trips first.</p>
+            <p className="text-sm text-muted-foreground">{loading ? 'Loading…' : 'No data — sync trips first.'}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

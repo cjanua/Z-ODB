@@ -2,10 +2,9 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   initDuckDB, getManifest, getTripSummaries, getTripSummary, getPulls, getAccelRuns,
-  resetForRebuild,
+  prepareReingest,
   type ManifestRow, type TripSummary, type PullRecord, type AccelRun,
 } from '@/lib/duckdb'
-import { clearAllCursors } from '@/lib/dropbox'
 import type { AsyncDuckDB } from '@duckdb/duckdb-wasm'
 
 // ─── DuckDB ready state ───────────────────────────────────────────────────────
@@ -43,7 +42,7 @@ export const QUERY_KEYS = {
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 
 export function useManifest() {
-  const { ready } = useDuckDB()
+  const { ready, error: dbError } = useDuckDB()
   const result = useQuery({
     queryKey: QUERY_KEYS.manifest,
     queryFn:  () => getManifest(),
@@ -52,14 +51,17 @@ export function useManifest() {
   })
   return {
     trips:   result.data ?? ([] as ManifestRow[]),
-    loading: result.isLoading,
-    error:   result.error ? String(result.error) : null,
+    // Unknown until DuckDB has initialised (WASM download + cache restore) AND
+    // the first query has resolved. A disabled query reports isLoading false,
+    // so relying on it renders "no trips" over data that is still loading.
+    loading: !ready || result.isPending,
+    error:   dbError ?? (result.error ? String(result.error) : null),
     refresh: () => result.refetch(),
   }
 }
 
 export function useTripSummaries(includeFragments = false) {
-  const { ready } = useDuckDB()
+  const { ready, error: dbError } = useDuckDB()
   const result = useQuery({
     queryKey: [...QUERY_KEYS.tripSummaries, includeFragments],
     queryFn:  () => getTripSummaries(includeFragments),
@@ -68,20 +70,19 @@ export function useTripSummaries(includeFragments = false) {
   })
   return {
     summaries: result.data ?? ([] as TripSummary[]),
-    loading:   result.isLoading,
-    error:     result.error ? String(result.error) : null,
+    loading:   !ready || result.isPending,
+    error:     dbError ?? (result.error ? String(result.error) : null),
     refresh:   () => result.refetch(),
   }
 }
 
-/** Hook: rebuild — wipes all data, clears cursor, triggers a fresh full sync. */
-export function useRebuild() {
-  const qc = useQueryClient()
-  return async () => {
-    await resetForRebuild()
-    qc.clear()
-    clearAllCursors()
-  }
+/**
+ * Hook: re-ingest — clears the cursor so the next sync re-lists everything and
+ * upserts it. Nothing is deleted and no query cache is dropped, so the UI keeps
+ * showing the trips it already has while the re-ingest runs.
+ */
+export function useReingest() {
+  return () => { prepareReingest() }
 }
 
 export function useTripSummary(tripId: string) {
@@ -96,22 +97,30 @@ export function useTripSummary(tripId: string) {
 
 export function usePulls(tripId?: string) {
   const { ready } = useDuckDB()
-  return useQuery({
+  const result = useQuery({
     queryKey: QUERY_KEYS.pulls(tripId),
     queryFn:  () => getPulls(tripId),
     enabled:  ready,
     staleTime: 0,
-  }) as { data: PullRecord[] | undefined; isLoading: boolean }
+  })
+  return {
+    data:      result.data as PullRecord[] | undefined,
+    isLoading: !ready || result.isPending,
+  }
 }
 
 export function useAccelRuns(tripId?: string) {
   const { ready } = useDuckDB()
-  return useQuery({
+  const result = useQuery({
     queryKey: QUERY_KEYS.accelRuns(tripId),
     queryFn:  () => getAccelRuns(tripId),
     enabled:  ready,
     staleTime: 0,
-  }) as { data: AccelRun[] | undefined; isLoading: boolean }
+  })
+  return {
+    data:      result.data as AccelRun[] | undefined,
+    isLoading: !ready || result.isPending,
+  }
 }
 
 /** Call this after a sync completes to refresh all DuckDB-backed views. */
